@@ -1,0 +1,246 @@
+# Building a frakpanel tile
+
+The panel shows three tiles side by side. A tile is a web page served from
+whatever machine holds its state (usually a laptop). The laptop dials *out*
+to the panel host and the host's kiosk browser renders the page through that
+connection, so nothing on the laptop is exposed and inbound firewalls don't
+matter. `demo_tile.py` is a complete working tile; `edgerelay.py` is the
+connection. Nothing else is needed.
+
+**This file travels as a kit** with those two files beside it, for a machine
+that doesn't have the repo (a locked-down work laptop, say):
+
+```
+mkdir -p /tmp/frakpanel-tiles && cp TILES.md edgerelay.py examples/demo_tile.py /tmp/frakpanel-tiles/
+```
+
+Both scripts are standard-library Python, so nothing gets installed on the
+other side. Paths below are relative to wherever the kit lives; call that
+`$KIT`. Re-send the kit whenever `edgerelay.py` changes: a relay protocol
+change without a re-send strands that laptop's tiles.
+
+`<panel-host>` below is the name or address of the machine the panel is
+plugged into. Set it once and the relay picks it up:
+
+```
+export FRAKPANEL_HOST=<panel-host>
+```
+
+## Connectivity
+
+Everything is **outbound from the laptop to the panel host**, plain TCP:
+
+| port | who dials | what | needed |
+|---|---|---|---|
+| 7782 | laptop -> host | the relay (`edgerelay.py`); carries the tile's bytes | yes |
+| 7781 | laptop -> host | edged's HTTP API (`/layout`, `/slot`, `/tiles`) | only for curl; the panel's picker does the same by touch |
+
+Preflight, in this order:
+```
+python3 -c 'import socket,os;print(socket.gethostbyname(os.environ["FRAKPANEL_HOST"]))'   # 1. does the name resolve here?
+nc -vz $FRAKPANEL_HOST 7782                                                             # 2. can we reach the relay?
+curl -s http://$FRAKPANEL_HOST:7781/tiles                                               # 3. optional: the API, and what the picker sees
+```
+- **If 1 fails** (a work VPN's resolver doesn't know your LAN's names), use
+  the host's IP address instead.
+- **If 2 fails** the laptop isn't on the same LAN or a VPN owns the route.
+  Check whether the LAN's subnet is being pulled into the tunnel
+  (`netstat -rn`). The relay works over any route that reaches the host, but
+  a tunnel detour adds latency to every tap.
+- **Names**: prefix the relay name with the machine (`air-`, `work-`). Two
+  relays with the same name fight, the newest wins, and the loser retries
+  every 30 s, so the tile flickers between them.
+- **Away and back**: the relay client pings every 5 s and is dropped after
+  15 s silent; it reconnects with backoff (1 s doubling to 30 s), so after
+  sleep the tile is back within half a minute. While it's away the slot shows
+  the clock with "waiting for <name>" and the picker lists the tile greyed
+  "away". Nothing needs restarting on the host.
+- **Nothing about the tile itself crosses the network.** It binds
+  `127.0.0.1`; only the relay's TCP stream leaves the laptop. Anything the
+  tile can reach on the laptop (a corporate API, a VPN-only host, a local
+  file) it can show on the panel, which is the point of hosting work tiles
+  on the work laptop.
+- **No auth anywhere.** edged trusts the LAN. Don't put a tile on the panel
+  that shouldn't be readable by whoever is at the desk.
+
+## The tile
+
+A tile is a web page that fills one of the panel's 3 fixed slots. It's served
+from whatever machine holds its state and reaches the panel host through the
+relay. The host side (`edged.py`, not in the kit) is already running, so a
+tile session shouldn't need to touch it.
+
+**The contract**
+- **Exactly 812x720 CSS px**, always: 2560 minus the 120px control column
+  minus two 2px slot dividers, split three ways. Scale is 100%, so CSS px =
+  panel px. Nothing spans slots, so don't build for any other size.
+- **Touch, not mouse.** Set `cursor:none; user-select:none` (Windows really
+  does draw a mouse pointer on the panel, and it stays where the last tap
+  was), and support `?cursor=1` to show it again for previews on a desktop
+  (`html.cursor,html.cursor *{cursor:auto}` plus one line of JS, see
+  `demo_tile.py`). Use `touch-action:manipulation` on buttons, and use
+  `pointerdown` for instant response. Make tap targets big: at least ~100px.
+  The panel is about 0.135mm/px, so a 100x72 button is about 13x10mm, and
+  ~11mm buttons proved too small. No hover states, since nothing hovers.
+- **Framing must be allowed**: no `X-Frame-Options` or `frame-ancestors`
+  CSP, or the slot renders blank.
+- **Plain http, no secure context**: no clipboard API, service workers,
+  etc. Absolute paths (`/api/x`) are fine, because each relay name gets its
+  own origin on the host.
+- **Bind to 127.0.0.1**, never the LAN. The relay is the only way in.
+  SSE, streaming and WebSockets pass through the relay untouched.
+- **Ignore the query string when routing** (`self.path.split("?", 1)[0]`).
+  Tiles get called with `?cursor=1`, and edged's own fallback uses
+  `/home?waiting=<name>`.
+- Dark background (the panel sits beside black slots and the column
+  `#0d0f14`). `demo_tile.py` is a complete working example of all of
+  the above (a page, SSE, and a timed tap round trip).
+
+**Run it**
+```
+python3 path/to/your_tile.py &                      # serves 127.0.0.1:<port>
+python3 $KIT/edgerelay.py --name <relay-name> --target 127.0.0.1:<port> --title "<Picker title>"
+curl -XPOST http://$FRAKPANEL_HOST:7781/slot -d '{"slot":0,"url":"relay://<relay-name>/"}'
+curl http://$FRAKPANEL_HOST:7781/layout          # see what's in each slot
+curl http://$FRAKPANEL_HOST:7781/tiles           # what the panel's picker offers
+```
+- One relay client exposes one target, so **each tile gets its own relay
+  name** (e.g. `air-board`, `air-mixer`). Two sessions using the same name
+  fight over it. Prefix the name with the machine (`air-`, `work-`) so two
+  laptops never collide.
+- `--title` is what the panel's **tile picker** (the column's `tiles`
+  button) shows. Once the relay has connected, the tile can be put in any
+  slot from the panel itself, so the `curl .../slot` is optional.
+- Slots are 0, 1, 2, left to right. There are no claims, so the last
+  choice wins (a POST or a tap on the picker): check `/layout` before taking
+  a slot someone else is using. If the relay client stops, the slot shows
+  "waiting for <name>" on the clock, not an error, and the picker lists the
+  tile greyed as "away" until edged restarts.
+- The relay client and tile run in the foreground of your session. For
+  keeps, see "Staying running" below.
+
+**See it**
+Develop in a Chrome app window, the same engine as the panel's kiosk. The
+panel is the target that counts.
+- **Develop and touch-emulate it** in a Chrome app window (macOS shown):
+  ```
+  open -na "Google Chrome" --args --app='http://127.0.0.1:<port>/?cursor=1' --window-size=812,720 --user-data-dir=/tmp/frakpanel-tile-chrome
+  ```
+  `?cursor=1` keeps the pointer visible so you can see where you are about to
+  click. Clicks fire `pointerdown` as a mouse. For real touch events (no hover,
+  drag scrolls or selects the way a finger would), open DevTools, then the
+  device toolbar. Under Dimensions > Edit… > Add custom device, use 812x720,
+  device pixel ratio 1, type "Desktop (touch)". Whether targets are big enough
+  for a finger (about 74px for a 10mm fingertip) can only be judged on the
+  panel.
+- **Optionally, watch it** on a Mac desktop: the Übersicht widget
+  `examples/uebersicht/edge-tile-preview.jsx` (in the repo, not the kit)
+  frames the tile's local URL. Install and settings are in its header
+  comment; set `TILE_URL` to your tile. It lays the page out at 812x720 and
+  scales it to 0.6. It checks layout and framing, and clicks reach the tile
+  (as mouse events). It renders in WebKit, not the panel's Chrome.
+- Locally, at true size, as a PNG:
+  ```
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+    --window-size=812,720 --virtual-time-budget=3000 --screenshot=tile.png http://127.0.0.1:<port>/
+  ```
+  If the page has a `setInterval` (every live tile does), Chrome writes the PNG
+  and then never exits. Run it in the background, wait for the file, and kill
+  the process by its `--user-data-dir`. A dedicated `--user-data-dir` also
+  keeps it from attaching to your running Chrome.
+- On the real panel (whole 2560x720, including the column), with a Windows
+  host:
+  ```
+  ssh <panel-host> 'schtasks /run /tn frakpanel-shot'
+  sleep 5; scp <panel-host>:frakpanel/edge-shot.png .
+  ```
+  (On a Linux host, run `edge-shot.sh` over ssh.) Don't trust it
+  while someone is connected over RDP: the capture is of the RDP-sized
+  desktop, not the panel.
+- The **reload** button in the column reloads all slots after you change a
+  page.
+
+**Gotchas that cost time**, so they don't cost it twice:
+- **The panel does show a mouse pointer**, contrary to the assumption that
+  Windows hides it under touch, hence `cursor:none` in the contract above.
+- **Redeploying a tile does not update the panel.** The kiosk's iframe keeps
+  the page it has until the slot's URL changes. Tap `reload` in the column,
+  or clear the slot and set it back.
+- **Headless `--screenshot` hangs on live pages** (see the PNG recipe above).
+- **Shrinking an iframe preview with `transform: scale()` silently swallows
+  every click** into the framed tile in WebKit. CSS `zoom` on the container
+  passes clicks through. That is why the Übersicht widget uses `zoom`.
+- **Übersicht doesn't notice a newly symlinked widget** until Übersicht
+  itself is restarted. `pkill -x Übersicht` matches nothing (the "Ü" in its
+  process name); use its menu bar item or kill the PID from
+  `pgrep -lf bersicht`.
+- **A JSX fragment (`<>`) in an Übersicht widget needs
+  `import { React } from "uebersicht"`**, or the widget shows "Can't find
+  variable: React".
+- **A port can be silently shared on Windows.** Python's `http.server` sets
+  `SO_REUSEADDR`, and on Windows that lets a test tile bind a port a relay
+  listener (7790 and up) already holds. Pick ports away from that range for
+  tiles served on the host, or set `allow_reuse_address = False`.
+
+**Don't** restart edged, change the layout format, or edit `edged.py` /
+`edgerelay.py` from a tile session.
+
+
+## Staying running (launchd)
+
+On a Mac, the relay and the tile each get a launchd agent (RunAtLoad +
+KeepAlive). Two agents, not one script: launchd restarts whichever one dies.
+For a tile named `work-cal` on port 8792:
+
+```
+KIT=$HOME/frakpanel-tiles; DATA="$HOME/Library/Application Support/frakpanel"; mkdir -p "$DATA"
+agent() {  # agent <label> <program> [args...]
+    local label=$1; shift; local args=""
+    for a in "$@"; do args+="<string>$a</string>"; done
+    cat > "$HOME/Library/LaunchAgents/$label.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>Label</key><string>$label</string>
+    <key>ProgramArguments</key><array>$args</array>
+    <key>WorkingDirectory</key><string>$KIT</string>
+    <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardOutPath</key><string>$DATA/$label.log</string>
+    <key>StandardErrorPath</key><string>$DATA/$label.log</string>
+</dict></plist>
+PLIST
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$label.plist"
+}
+agent com.example.frakpanel-work-cal        /usr/bin/python3 $KIT/work_cal_tile.py
+agent com.example.frakpanel-work-cal-relay  /usr/bin/python3 $KIT/edgerelay.py --host <panel-host> --name work-cal --target 127.0.0.1:8792 --title "Work calendar"
+```
+- After editing the tile, `launchctl kickstart -k gui/$(id -u)/com.example.frakpanel-work-cal`,
+  then clear and re-set the slot (or tap reload in the column): the kiosk
+  keeps the page it has until the slot's URL changes.
+- Use a real interpreter path (`/usr/bin/python3`, or a venv's) rather than
+  whatever `python3` is on the shell's PATH; launchd's PATH is short. For the
+  same reason pass `--host` explicitly: launchd doesn't see your shell's
+  `FRAKPANEL_HOST`.
+- Order the relay after the tile so the first `open` finds something to dial;
+  it doesn't matter much, since a failed stream just shows a blank until the
+  next load.
+
+## Handing a tile to a coding agent on another machine
+
+Give it this file and say what the tile should show. The checklist it should
+follow:
+
+1. Preflight (above). Pick a machine-prefixed relay name and an unused
+   local port (give each machine its own range, e.g. 8790-8799 on one laptop
+   and 8800 up on the next).
+2. Copy `demo_tile.py` to `<name>_tile.py` beside it, keep its `Handler`
+   shape (query string stripped, `Content-Length`, `no-store`), replace the
+   page. Keep the contract, especially 812x720 and `cursor:none`.
+3. Run tile + relay in the foreground, check `/tiles` lists it, put it in a
+   slot from the panel's picker (or the curl), look at it on the panel
+   ("See it" above). Adjust tap sizes on the panel, not in Chrome.
+4. Two launchd agents (above). Confirm it survives a laptop sleep/wake.
+5. Keep the tile with the kit, and tell whoever runs the panel the relay
+   name and title.

@@ -1,0 +1,9 @@
+# runtime state, written beside the scripts
+edge_layout.json
+edge_relays.json
+edged.log
+edge-shot.png
+# this host's own picker entries (see local_tiles.example.json)
+local_tiles.json
+__pycache__/
+.DS_Store
