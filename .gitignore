@@ -7,3 +7,5 @@ edge-shot.png
 local_tiles.json
 __pycache__/
 .DS_Store
+# session handoff notes, never published
+CLAUDE.local.md
