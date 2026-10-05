@@ -118,7 +118,7 @@ class Client:
 
 
 class RelayServer:
-    def __init__(self, log, state_path: str = os.path.join(HERE, "edge_relays.json")):
+    def __init__(self, log, state_path: str = os.path.join(os.environ.get("FRAKPANEL_DATA", HERE), "edge_relays.json")):
         self.log = log
         self.lock = threading.Lock()
         self.clients: dict[str, Client] = {}

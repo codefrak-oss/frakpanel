@@ -1,0 +1,78 @@
+# Every push to main publishes a beta release (v<VERSION>-beta.<run>, marked
+# prerelease); pushing tag v<VERSION> publishes that stable release. Installs
+# on the beta channel pick up the former, everyone on stable the latter
+# (README, "Releases and updates"). VERSION holds the next stable number:
+# bump it right after tagging, or the next beta fails on purpose (its betas
+# would sort below the stable release they follow).
+#
+# Assets per release:
+#   frakpanel-<ver>.zip              source, for Linux (and anything with Python)
+#   frakpanel-<ver>-windows-x64.zip  source plus the embedded Python below
+name: release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+permissions:
+  contents: write
+concurrency: release
+env:
+  PY_EMBED: "3.13.9"
+  PY_EMBED_SHA256: 91d828c2da3a029b41699e918674a0cb379c02cf20dab9c501306885f837402a
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: v
+        run: |
+          base="$(cat VERSION)"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+            [[ "$ver" == "$base" ]] || { echo "tag $GITHUB_REF_NAME does not match VERSION $base"; exit 1; }
+            pre=false
+          else
+            if git ls-remote --exit-code --tags origin "refs/tags/v$base" >/dev/null; then
+              echo "v$base is already released; bump VERSION"; exit 1
+            fi
+            ver="$base-beta.$GITHUB_RUN_NUMBER"
+            pre=true
+          fi
+          echo "ver=$ver" >>"$GITHUB_OUTPUT"
+          echo "pre=$pre" >>"$GITHUB_OUTPUT"
+      - name: Smoke test
+        run: |
+          python3 -m py_compile *.py examples/*.py
+          python3 edged.py --no-browser & pid=$!
+          sleep 3
+          curl -fsS http://127.0.0.1:7781/version
+          curl -fsS http://127.0.0.1:7781/layout
+          kill $pid
+      - name: Build
+        env:
+          VER: ${{ steps.v.outputs.ver }}
+        run: |
+          mkdir -p build/src/frakpanel-$VER build/win
+          git archive HEAD | tar -x -C build/src/frakpanel-$VER
+          echo "$VER" >build/src/frakpanel-$VER/VERSION
+          (cd build/src && zip -qr ../frakpanel-$VER.zip frakpanel-$VER)
+          cp -r build/src/frakpanel-$VER build/win/
+          curl -fsSL -o build/embed.zip \
+            "https://www.python.org/ftp/python/$PY_EMBED/python-$PY_EMBED-embed-amd64.zip"
+          echo "$PY_EMBED_SHA256  build/embed.zip" | sha256sum -c -
+          unzip -q build/embed.zip -d build/win/frakpanel-$VER/python
+          # The embedded Python ignores PYTHONPATH and the script's dir; ".."
+          # (the version dir) lets edged.py import its sibling modules.
+          printf '..\r\n' >>build/win/frakpanel-$VER/python/python*._pth
+          (cd build/win && zip -qr ../frakpanel-$VER-windows-x64.zip frakpanel-$VER)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.v.outputs.ver }}
+        run: |
+          flags=()
+          [[ "${{ steps.v.outputs.pre }}" == true ]] && flags+=(--prerelease --latest=false)
+          gh release create "v$VER" --target "$GITHUB_SHA" --title "frakpanel $VER" \
+            --generate-notes "${flags[@]}" \
+            build/frakpanel-$VER.zip build/frakpanel-$VER-windows-x64.zip

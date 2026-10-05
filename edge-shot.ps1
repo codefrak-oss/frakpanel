@@ -3,7 +3,7 @@
 # Run by the on-demand Scheduled Task "frakpanel-shot" (install-windows.ps1)
 # in the logged-in user's session:
 #   ssh <panel-host> 'schtasks /run /tn frakpanel-shot'
-#   scp <panel-host>:frakpanel/edge-shot.png .
+#   scp '<panel-host>:AppData/Local/frakpanel/edge-shot.png' .
 # While an RDP client is attached this captures the RDP-sized desktop, not
 # the panel; hand the session back to the console first (README, "RDP").
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

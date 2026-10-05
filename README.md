@@ -44,7 +44,8 @@ Not affiliated with or endorsed by Corsair. "Xeneon" is their trademark.
 | `edged.py` | panel host | The daemon: shell page and layout API on HTTP 7781, the relay server on TCP 7782, and supervision of the kiosk browser. Its docstring is the API reference. |
 | `kiosk_win.py`, `kiosk_linux.py` | panel host | The platform part of `edged`: launching Chrome and keeping its window on top. |
 | `edgerelay.py` | both | The relay. `edged` imports the server half; a laptop runs it as a client. Its docstring is the protocol reference. |
-| `install-windows.ps1`, `install-linux.sh` | panel host | Start `edged` at logon (Scheduled Task / systemd user unit). |
+| `install-windows.ps1`, `install-linux.sh` | panel host | Install into a per-user folder and start it at logon (Scheduled Task / systemd user unit). |
+| `launcher.py`, `updater.py` | panel host | What the installed copy runs: the launcher keeps `edged` running and rolls back a bad update; the updater (opt-in) fetches new releases. |
 | `edge-shot.ps1`, `edge-shot.sh` | panel host | Screenshot the panel, for checking it over ssh. |
 | `examples/demo_tile.py` | laptop | A complete working tile: a page, an SSE stream, and a timed tap round trip. |
 | `examples/uebersicht/` | Mac | Optional [Übersicht](https://tracesof.net/uebersicht/) widget that previews a tile at slot size on the desktop. |
@@ -64,16 +65,19 @@ open http://127.0.0.1:7781/                     # the shell, in a 2560x720 windo
 ```
 
 **On the panel host** (the Edge plugged in as a display at 2560x720, scale
-100%, with Google Chrome installed):
+100%, with Google Chrome installed), download the latest
+[release](https://github.com/codefrak-oss/frakpanel/releases), unzip it, and
+run the installer from the unzipped folder:
 
 ```
-git clone https://github.com/codefrak-oss/frakpanel
-cd frakpanel
-powershell -ExecutionPolicy Bypass -File install-windows.ps1     # Windows
-./install-linux.sh --system && ./install-linux.sh                # Linux (X11)
+powershell -ExecutionPolicy Bypass -File install-windows.ps1     # Windows: frakpanel-<ver>-windows-x64.zip
+./install-linux.sh --system && ./install-linux.sh                # Linux (X11): frakpanel-<ver>.zip, Python 3.9+
 ```
 
-The panel shows three clocks and the column.
+The Windows zip brings its own Python, so nothing else needs installing. Either
+installer also works from a git checkout (on Windows, `pythonw.exe` must then
+be on PATH). The install lands in `%LOCALAPPDATA%\frakpanel` or
+`~/.local/share/frakpanel`, and the panel shows three clocks and the column.
 
 **On each laptop**, copy over `edgerelay.py` (the only file a laptop needs)
 and point it at a local web server:
@@ -152,7 +156,33 @@ and nothing spans. This is deliberate:
 | Panel host for the relay client | `--host` or `FRAKPANEL_HOST` |
 | Fixed picker entries | `local_tiles.json` |
 | Which output is the panel (Linux) | found by its 2560x720 mode in `xrandr`, or `EDGE_POSITION="x,y"` |
-| State | `edge_layout.json`, `edge_relays.json`, `edged.log`, beside the scripts |
+| Updates | `update.json` in the data folder (below) |
+| State | `edge_layout.json`, `edge_relays.json`, `edged.log`, `launcher.log`, in the install's `data` folder (`%LOCALAPPDATA%\frakpanel\data`, `~/.local/share/frakpanel/data`); beside the scripts when run from a checkout |
+| Fixed picker entries, installed | `local_tiles.json` goes in that `data` folder too |
+
+### Releases and updates
+
+Releases are [GitHub Releases](https://github.com/codefrak-oss/frakpanel/releases),
+built by `.github/workflows/release.yml`:
+
+- **beta**: every push to `main` publishes `v<VERSION>-beta.<n>` as a
+  prerelease.
+- **stable**: pushing the tag `v<VERSION>` publishes that version. Bump
+  `VERSION` straight after; until then, betas fail on purpose.
+
+An installed copy updates itself only if you opt in. Create `update.json` in
+the data folder:
+
+```
+{"channel": "stable"}      or      {"channel": "beta"}
+```
+
+It checks every 6 hours (`"check_hours"`), installs a newer release beside the
+current one, and restarts into it. If the new version keeps dying within its
+first two minutes, the launcher rolls back to the previous one and the updater
+skips that release. `curl http://<panel-host>:7781/version` shows the running
+version, the channel, and the last check. The kiosk browser is untouched by
+an update.
 
 ## Security
 

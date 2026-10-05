@@ -9,3 +9,4 @@ __pycache__/
 .DS_Store
 # session handoff notes, never published
 CLAUDE.local.md
+build/

@@ -53,7 +53,11 @@ Two jobs in one process:
      SingletonLock, X11 via xdotool and wmctrl). Their docstrings have the
      details; this file only drives the Kiosk interface they share.
 
-The layout survives restarts in edge_layout.json beside this file.
+       GET  /version   {"version", "channel", "latest", "checked", "error"}: this
+                       build and what the updater last saw (updater.py).
+
+The layout survives restarts in edge_layout.json, in $FRAKPANEL_DATA (set by
+launcher.py to the install's data/ dir) or else beside this file.
 
 Standard library only. Runs with:
     pythonw.exe edged.py     (Scheduled Task "frakpanel", install-windows.ps1)
@@ -73,6 +77,7 @@ import threading
 import time
 
 import edgerelay
+import updater
 
 if sys.platform == "win32":
     import kiosk_win as kiosk_platform  # Chrome + user32
@@ -80,12 +85,17 @@ else:
     import kiosk_linux as kiosk_platform  # Chrome/Chromium + X11 (xdotool, wmctrl)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Runtime state. Installed copies run from versions/<ver>/ under launcher.py,
+# which points this at the install's data/ dir so state survives updates; a
+# plain checkout keeps it beside the scripts.
+DATA = os.environ.get("FRAKPANEL_DATA", HERE)
+VERSION = updater.read_version(HERE)
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("EDGED_PORT", "7781"))
-LOG_PATH = os.path.join(HERE, "edged.log")
-LAYOUT_PATH = os.path.join(HERE, "edge_layout.json")
+LOG_PATH = os.path.join(DATA, "edged.log")
+LAYOUT_PATH = os.path.join(DATA, "edge_layout.json")
 SLOTS = 3  # completely fixed; see the module docstring
-LOCAL_TILES_PATH = os.path.join(HERE, "local_tiles.json")  # optional; see load_local_tiles()
+LOCAL_TILES_PATH = os.path.join(DATA, "local_tiles.json")  # optional; see load_local_tiles()
 RELAUNCH_MIN_INTERVAL = 15.0  # seconds between browser launches, so a crash loop can't spawn windows
 REPIN_SECONDS = 300  # the column's unpin re-pins itself, since other windows can cover the re-pin button
 SETTLE_SECONDS = 0.4  # after a raise, how long the kiosk must stay on top before we call it raised
@@ -323,6 +333,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     layout: Layout
     local_tiles: list[dict]
     relay: edgerelay.RelayServer
+    updater: updater.Updater
 
     def log_message(self, fmt, *args) -> None:  # quiet: the shell polls every 2s
         pass
@@ -365,6 +376,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/tiles":
             self.json(200, {"tiles": [dict(t, online=True) for t in self.local_tiles] + self.relay.tiles(),
                             "slots": self.layout.get()})
+        elif path == "/version":
+            self.json(200, self.updater.status())
         else:
             self.json(404, {"error": "not found"})
 
@@ -547,7 +560,9 @@ def main() -> int:
     Handler.relay = edgerelay.RelayServer(log)
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:
-        log(f"listening on {HOST}:{PORT}, shell {SHELL_HASH}, slots {Handler.layout.get()}")
+        log(f"frakpanel {VERSION} listening on {HOST}:{PORT}, shell {SHELL_HASH}, slots {Handler.layout.get()}")
+        Handler.updater = updater.Updater(HERE, DATA, VERSION, log)
+        threading.Thread(target=Handler.updater.run, daemon=True).start()
         if "--no-browser" not in sys.argv:
             threading.Thread(target=supervise_browser, daemon=True).start()
             threading.Thread(target=keep_on_top, daemon=True).start()

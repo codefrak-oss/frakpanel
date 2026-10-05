@@ -152,7 +152,7 @@ panel is the target that counts.
   host:
   ```
   ssh <panel-host> 'schtasks /run /tn frakpanel-shot'
-  sleep 5; scp <panel-host>:frakpanel/edge-shot.png .
+  sleep 5; scp '<panel-host>:AppData/Local/frakpanel/edge-shot.png' .
   ```
   (On a Linux host, run `edge-shot.sh` over ssh.) Don't trust it
   while someone is connected over RDP: the capture is of the RDP-sized
