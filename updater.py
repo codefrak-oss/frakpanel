@@ -4,9 +4,16 @@ updater.py -- frakpanel's opt-in self-update, run as a thread inside edged.
 Off unless <data>/update.json says otherwise:
     {"channel": "stable"}          stable releases only
     {"channel": "beta"}            stable and beta (every push to main)
-    optional: "check_hours": 6, "github_token": "..." (only needed while the
-    repo is private), "repo": "owner/name", "api": "https://api.github.com"
-    (tests point this at a fake; FRAKPANEL_UPDATE_DELAY shortens the wait)
+    optional: "check_seconds" (default 15 on beta, 3600 on stable),
+    "github_token": "..." (needed while the repo is private), "repo":
+    "owner/name", "api": "https://api.github.com" (tests point this at a
+    fake; FRAKPANEL_UPDATE_DELAY shortens the wait before the first check)
+
+Checks are cheap enough to make every few seconds: each one sends the ETag
+of the last answer, and GitHub replies 304 with no body while nothing has
+changed, which does not count against an authenticated rate limit. Without
+a token, GitHub allows 60 API calls an hour per IP, so checks are spaced
+to at least ANON_MIN_SECONDS; a 403/429 backs off until GitHub's reset time.
 
 Only a copy installed from a release zip updates: one running from
 <root>/versions/<ver>/ under launcher.py (see install-windows.ps1,
@@ -33,12 +40,15 @@ import re
 import shutil
 import sys
 import time
+import urllib.error
 import urllib.request
 import zipfile
 
 REPO = "codefrak-oss/frakpanel"
 EXIT_UPDATE = 75  # launcher.py: restart immediately on the new current version
 FIRST_CHECK_DELAY = float(os.environ.get("FRAKPANEL_UPDATE_DELAY", 120))  # seconds after start, so a crash-looping build can't also be updating
+DEFAULT_CHECK_SECONDS = {"beta": 15.0, "stable": 3600.0}
+ANON_MIN_SECONDS = 120.0  # 60 unauthenticated calls/hour/IP, shared with anything else on the LAN
 KEEP_VERSIONS = 3  # unpacked versions kept on disk, current and previous included
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$")
 
@@ -78,6 +88,8 @@ class Updater:
         self.latest: str | None = None
         self.checked: float | None = None
         self.error: str | None = None
+        self.etag: tuple | None = None  # (channel, ETag) of the last releases listing; see check()
+        self.backoff_until = 0.0
 
     def config(self) -> dict:
         try:
@@ -101,20 +113,31 @@ class Updater:
         return {"version": self.version, "channel": self.config().get("channel", "off"),
                 "installed": self.root is not None, "latest": self.latest,
                 "checked": self.checked and time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.checked)),
-                "error": self.error}
+                "error": self.error,
+                "skipped": self.latest if self.root and self.latest
+                and self.latest == self.launcher_state().get("rolled_back_from") else None}
+
+    def interval(self, cfg: dict) -> float:
+        secs = float(cfg.get("check_seconds", DEFAULT_CHECK_SECONDS.get(cfg.get("channel"), 3600.0)))
+        return max(secs, 5.0 if cfg.get("github_token") else ANON_MIN_SECONDS)
 
     def run(self) -> None:
         time.sleep(FIRST_CHECK_DELAY)
         while True:
             cfg = self.config()
-            if cfg.get("channel") in ("stable", "beta") and self.root and version_key(self.version):
+            if (cfg.get("channel") in ("stable", "beta") and self.root and version_key(self.version)
+                    and time.time() >= self.backoff_until):
                 try:
-                    self.error = None
                     self.check(cfg)
+                    self.error = None
                 except Exception as exc:  # offline, rate-limited, bad asset: try again next round
+                    if isinstance(exc, urllib.error.HTTPError) and exc.code in (403, 429):
+                        reset = exc.headers.get("x-ratelimit-reset") or ""
+                        self.backoff_until = float(reset) if reset.isdigit() else time.time() + 600
+                    if repr(exc) != self.error:  # checks run every few seconds: log changes, not repeats
+                        self.log(f"update check failed: {exc!r}")
                     self.error = repr(exc)
-                    self.log(f"update check failed: {exc!r}")
-            time.sleep(max(0.25, float(cfg.get("check_hours", 6))) * 3600)
+            time.sleep(self.interval(cfg))
 
     def request(self, url: str, cfg: dict, accept: str) -> urllib.request.Request:
         headers = {"Accept": accept, "User-Agent": f"frakpanel/{self.version}"}
@@ -126,9 +149,19 @@ class Updater:
         repo = cfg.get("repo", REPO)
         req = self.request(f"{cfg.get('api', 'https://api.github.com')}/repos/{repo}/releases?per_page=30", cfg,
                            "application/vnd.github+json")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            releases = json.load(resp)
-        beta = cfg.get("channel") == "beta"
+        channel = cfg.get("channel")
+        if self.etag and self.etag[0] == channel:  # a 304 for the other channel's listing means nothing
+            req.add_header("If-None-Match", self.etag[1])
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                releases = json.load(resp)
+                etag = resp.headers.get("ETag")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304:  # nothing changed since the last listing
+                self.checked = time.time()
+                return
+            raise
+        beta = channel == "beta"
         best, best_key = None, None
         for rel in releases:
             if rel.get("draft") or (rel.get("prerelease") and not beta):
@@ -138,19 +171,19 @@ class Updater:
                 best, best_key = rel, key
         self.checked = time.time()
         if best is None:
+            self.etag = (channel, etag) if etag else None
             return
         target = best["tag_name"].lstrip("v")
         self.latest = target
-        if best_key <= version_key(self.version):
-            return
-        if target == self.launcher_state().get("rolled_back_from"):
-            self.error = f"{target} was rolled back after failing to start; waiting for a newer release"
-            return
-        asset = next((a for a in best.get("assets", []) if a.get("name") == asset_name(target)), None)
-        if asset is None:
-            raise RuntimeError(f"release {target} has no {asset_name(target)}")
-        self.log(f"updating {self.version} -> {target}")
-        self.install(target, asset, cfg)
+        if best_key > version_key(self.version) and target != self.launcher_state().get("rolled_back_from"):
+            asset = next((a for a in best.get("assets", []) if a.get("name") == asset_name(target)), None)
+            if asset is None:  # CI may still be uploading it; the next check retries
+                raise RuntimeError(f"release {target} has no {asset_name(target)}")
+            self.log(f"updating {self.version} -> {target}")
+            self.install(target, asset, cfg)  # exits on success
+        # Only a listing handled to the end may answer later checks with 304;
+        # one whose install failed has to be fetched again.
+        self.etag = (channel, etag) if etag else None
 
     def install(self, target: str, asset: dict, cfg: dict) -> None:
         versions = os.path.join(self.root, "versions")

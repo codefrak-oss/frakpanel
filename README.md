@@ -177,8 +177,13 @@ the data folder:
 {"channel": "stable"}      or      {"channel": "beta"}
 ```
 
-It checks every 6 hours (`"check_hours"`), installs a newer release beside the
-current one, and restarts into it. If the new version keeps dying within its
+It checks every 15 seconds on beta and hourly on stable (`"check_seconds"`),
+installs a newer release beside the current one, and restarts into it, so a
+beta reaches the panel within about 15 seconds of CI publishing it. The
+frequent checks are conditional requests that GitHub answers with an empty
+304 while nothing has changed, which doesn't count against the rate limit of
+an authenticated request. Without a `"github_token"`, GitHub allows only 60
+API calls an hour per IP, so checks slow to one every 2 minutes. If the new version keeps dying within its
 first two minutes, the launcher rolls back to the previous one and the updater
 skips that release. `curl http://<panel-host>:7781/version` shows the running
 version, the channel, and the last check. The kiosk browser is untouched by
