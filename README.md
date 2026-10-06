@@ -7,8 +7,8 @@ computers, without iCUE.
 The panel stays plugged into one small always-on machine (the **panel host**;
 ours is an Intel NUC). That machine runs a kiosk browser on the panel and
 nothing else of interest. Every other computer on the desk serves its own
-**tiles**: ordinary web pages, sized for one third of the panel, that show
-whatever that computer knows and take taps.
+**[tiles](TILES.md)**: ordinary web pages, sized for one third of the panel,
+that show whatever that computer knows and take taps.
 
 ```
 +---------------------- Xeneon Edge, 2560x720 ----------------------+
@@ -48,6 +48,7 @@ Not affiliated with or endorsed by Corsair. "Xeneon" is their trademark.
 | `launcher.py`, `updater.py` | panel host | What the installed copy runs: the launcher keeps `edged` running and rolls back a bad update; the updater (opt-in) fetches new releases. |
 | `edge-shot.ps1`, `edge-shot.sh` | panel host | Screenshot the panel, for checking it over ssh. |
 | `examples/demo_tile.py` | laptop | A complete working tile: a page, an SSE stream, and a timed tap round trip. |
+| `examples/self_hosted_tile.py` | laptop or host | A tile that polls a self-hosted HTTP API server-side and renders its data. |
 | `examples/uebersicht/` | Mac | Optional [Übersicht](https://tracesof.net/uebersicht/) widget that previews a tile at slot size on the desktop. |
 | [`TILES.md`](TILES.md) | | **How to build a tile.** Written so it can be handed, with `edgerelay.py` and `demo_tile.py`, to someone (or a coding agent) on another machine. |
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | | What the Edge is on the wire, panel settings over DDC, and why the panel isn't plugged into a Mac. |
