@@ -100,7 +100,12 @@ def main():
             continue
         log(f"starting {current}")
         started = time.monotonic()
-        child = subprocess.Popen([sys.executable, os.path.join(vdir, "edged.py")] + sys.argv[1:],
+        # Through -c, not the script path: Windows' embedded Python ignores both
+        # PYTHONPATH and the script's own dir (its ._pth fixes sys.path), so
+        # edged.py could not import its sibling modules.
+        boot = ("import runpy, sys; sys.path.insert(0, sys.argv[1]); "
+                "sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], run_name='__main__')")
+        child = subprocess.Popen([sys.executable, "-c", boot, vdir, os.path.join(vdir, "edged.py")] + sys.argv[1:],
                                  cwd=vdir, env=env)
         code = None
         while code is None:
