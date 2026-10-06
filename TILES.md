@@ -7,6 +7,15 @@ connection, so nothing on the laptop is exposed and inbound firewalls don't
 matter. `demo_tile.py` is a complete working tile; `edgerelay.py` is the
 connection. Nothing else is needed.
 
+**Examples, at a glance:**
+
+| Example | Shows |
+|---|---|
+| `examples/demo_tile.py` | A complete working tile served from a laptop: a page, an SSE stream, and a timed tap round trip. |
+| `examples/self_hosted_tile.py` | A tile that polls a self-hosted HTTP API server-side and renders its data, with a readable error state when the upstream is down. See "Tiles backed by a self-hosted web server" below. |
+| `examples/uebersicht/edge-tile-preview.jsx` | An Übersicht widget that previews a tile at slot size on a Mac desktop. |
+| `local_tiles.example.json` | Two fixed picker entries (`url`/`title`) for pages the panel host reaches directly, no relay involved. |
+
 **This file travels as a kit** with those two files beside it, for a machine
 that doesn't have the repo (a locked-down work laptop, say):
 
@@ -184,6 +193,79 @@ panel is the target that counts.
 
 **Don't** restart edged, change the layout format, or edit `edged.py` /
 `edgerelay.py` from a tile session.
+
+
+## Tiles backed by a self-hosted web server
+
+The common case the contract above doesn't spell out: the data lives on a
+LAN service (a NAS, Grafana, Jellyfin, a home-grown API), not on the laptop
+running the relay. Two routes, depending on whether that service already
+serves a page you want shown as-is, or you want to build a small tile on top
+of its API.
+
+### Route A: frame the page directly, no relay
+
+If the self-hosted service already serves a page that's fine at slot size,
+skip the relay entirely and point a slot straight at it. This only works
+when the panel host can reach the service directly (same LAN); it's not for
+a laptop's tiles.
+
+1. Copy `local_tiles.example.json` to `local_tiles.json` **beside `edged.py`**
+   (the install's folder when installed: `%LOCALAPPDATA%\frakpanel` or
+   `~/.local/share/frakpanel`; the data subfolder there if running
+   installed; beside the scripts when run from a checkout -- see
+   `README.md`'s Configuration table).
+2. Each entry is `{"url": "...", "title": "..."}`: `url` is anything the
+   panel host can reach directly (`http://grafana.lan:3000/d/desk?kiosk`),
+   `title` is what the picker shows.
+3. Restart `edged` so it re-reads the file. The entry then appears in the
+   picker like any other tile.
+
+**If the slot renders blank**, the page is refusing to be framed: check its
+response headers for `X-Frame-Options: DENY`/`SAMEORIGIN` or a
+`Content-Security-Policy` with `frame-ancestors`. Both block embedding in an
+iframe, which is exactly what the shell page does with every slot. Fix it on
+the service side (most self-hosted apps have a setting for this, since
+they're usually the ones that *want* to be embedded):
+- Grafana: `[security] allow_embedding = true` in `grafana.ini`, and drop any
+  `frame-ancestors` CSP it sets, or widen it to include the panel host.
+- A reverse proxy in front of the service: check it isn't adding
+  `X-Frame-Options` itself (nginx's `proxy_hide_header` / a custom `add_header`).
+- Something you don't control the config of: it can't be framed; use Route B
+  instead, fetching its API from a small tile you do control.
+
+### Route B: a small tile that fetches the API server-side
+
+When the service only exposes a JSON/HTTP API (no presentable page), or its
+page can't be made embeddable, build a small tile that fetches the API from
+Python and renders the result as HTML -- not from the browser. Fetching from
+the browser would be a cross-origin request from the tile's own
+127.0.0.1-only origin to the LAN service, which CORS blocks unless the
+service happens to send the right headers; fetching server-side sidesteps
+that, and keeps the service's address and any credentials off the page
+`view-source:` would show.
+
+`examples/self_hosted_tile.py` is a complete example of this: stdlib only, a
+background thread polls a configurable upstream URL on an interval and
+caches the latest result (or the error, if the upstream didn't answer), and
+the page polls `/state` on *this* tile and renders whatever it finds --
+still following the contract above (812x720, `cursor:none`, query string
+ignored when routing, `?cursor=1` honoured).
+
+```
+export SELF_HOSTED_TILE_UPSTREAM=http://nas.example.lan:8080/api/status
+python3 examples/self_hosted_tile.py &                 # serves 127.0.0.1:8791, polls the upstream
+python3 edgerelay.py --host <panel-host> --name air-nas --target 127.0.0.1:8791 --title "NAS"
+curl -XPOST http://<panel-host>:7781/slot -d '{"slot":0,"url":"relay://air-nas/"}'
+```
+
+- `--upstream`/`$SELF_HOSTED_TILE_UPSTREAM` is the only thing to change for a
+  different service; `--port` and `--interval` (poll period) are optional.
+- The browser never talks to the upstream: it only ever calls back to this
+  tile's own `/state`, which is why there's no CORS problem to work around.
+- If the upstream is unreachable, the tile keeps serving 200s and shows a
+  readable error on the page instead of going blank -- a down LAN service
+  shouldn't make the slot look like a relay/framing problem.
 
 
 ## Staying running (launchd)
