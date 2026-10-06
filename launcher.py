@@ -4,22 +4,28 @@ Task (Windows) or systemd user unit (Linux) runs this from the install root:
 
     <root>/launcher.py       this file (updater.py replaces it on update)
     <root>/launcher.json     {"current": "0.2.0", "previous": "0.1.0", "pending": bool}
-    <root>/versions/<ver>/   one unpacked release each; on Windows with python/
+    <root>/versions/<ver>/   one unpacked release each (the Windows ones carry a
+                             python/ that only the installer uses)
     <root>/runtime/          (Windows) the embedded Python that runs this file
+                             and edged. One fixed path on purpose: Windows
+                             Firewall rules are per program, and a new path
+                             per version meant a new firewall prompt on the
+                             panel at every update, which nobody answers, so
+                             it turns into a block rule. A new Python reaches
+                             runtime/ only by rerunning the installer.
     <root>/data/             state shared by every version: layout, relays,
                              local_tiles.json, update.json, edged.log, launcher.log
 
 It runs versions/<current>/edged.py as a child with FRAKPANEL_DATA=<root>/data,
-using that version's own python/ when it has one, else this interpreter, and
-starts it again whenever it exits: at once after an update (exit EXIT_UPDATE),
+on this same interpreter, and starts it again whenever it exits: at once after an update (exit EXIT_UPDATE),
 after RESTART_DELAY otherwise.
 
 Rollback: while "pending" (set by an update), a child that dies within
 HEALTHY_AFTER seconds counts as a failed start. After MAX_FAILED_STARTS of
 those, current goes back to previous. Surviving HEALTHY_AFTER clears pending.
 
-Standard library only; must keep working with whatever older python/ an
-install bootstrapped from, so keep it plain.
+Standard library only; must keep working on whatever older Python an install
+bootstrapped runtime/ from, so keep it plain.
 """
 import json
 import os
@@ -63,12 +69,6 @@ def save_state(state):
     os.replace(STATE_PATH + ".tmp", STATE_PATH)
 
 
-def interpreter(vdir):
-    exe = "pythonw.exe" if sys.platform == "win32" else "python3"
-    own = os.path.join(vdir, "python", exe)
-    return own if os.path.isfile(own) else sys.executable
-
-
 child = None
 
 
@@ -100,7 +100,7 @@ def main():
             continue
         log(f"starting {current}")
         started = time.monotonic()
-        child = subprocess.Popen([interpreter(vdir), os.path.join(vdir, "edged.py")] + sys.argv[1:],
+        child = subprocess.Popen([sys.executable, os.path.join(vdir, "edged.py")] + sys.argv[1:],
                                  cwd=vdir, env=env)
         code = None
         while code is None:

@@ -42,6 +42,17 @@ if (Test-Path "$src\python\pythonw.exe") {
 }
 [IO.File]::WriteAllText("$vdir\VERSION", $ver)
 Copy-Item "$src\launcher.py", "$src\edge-shot.ps1" $root -Force
+# Inbound 7781/7782 for the one interpreter every version runs on (launcher.py
+# says why it is one path). Needs an elevated shell; otherwise Windows asks on
+# the panel's desktop, behind the kiosk, and an unanswered prompt becomes a
+# block rule.
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($admin) {
+    Get-NetFirewallApplicationFilter | Where-Object { $_.Program -like "$root\*" } | Get-NetFirewallRule | Remove-NetFirewallRule
+    New-NetFirewallRule -DisplayName "frakpanel" -Direction Inbound -Action Allow -Program $py -Protocol TCP -LocalPort 7781, 7782 -Profile Private, Domain | Out-Null
+} else {
+    Write-Warning "not elevated: no firewall rule added. Rerun from an elevated PowerShell, or allow $py on private networks when Windows asks."
+}
 if ((Test-Path "$src\local_tiles.json") -and -not (Test-Path "$root\data\local_tiles.json")) {
     Copy-Item "$src\local_tiles.json" "$root\data\"
 }
