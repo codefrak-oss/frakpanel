@@ -21,7 +21,8 @@ install-linux.sh). A checkout, or an install made from one ("-dev"), reports
 itself and never touches anything.
 
 An update downloads the release asset for this platform (the Windows zip
-carries its own embedded Python; the plain zip is source only), unpacks it to
+carries an embedded Python, which only the installer uses: every version runs
+on the install's runtime/, see launcher.py), unpacks it to
 versions/<ver>/, points launcher.json at it with the old version kept as
 "previous" and "pending" set, copies the new launcher.py over the root one, and
 exits edged with EXIT_UPDATE. launcher.py starts the new version right away

@@ -74,7 +74,11 @@ powershell -ExecutionPolicy Bypass -File install-windows.ps1     # Windows: frak
 ./install-linux.sh --system && ./install-linux.sh                # Linux (X11): frakpanel-<ver>.zip, Python 3.9+
 ```
 
-The Windows zip brings its own Python, so nothing else needs installing. Either
+On Windows, run it from an elevated PowerShell as the user who stays logged in
+at the panel: elevation lets it add the one firewall rule frakpanel needs
+(inbound 7781/7782). Without it, Windows asks on the panel's desktop, behind
+the kiosk, and an unanswered prompt becomes a block rule. The Windows zip
+brings its own Python, so nothing else needs installing. Either
 installer also works from a git checkout (on Windows, `pythonw.exe` must then
 be on PATH). The install lands in `%LOCALAPPDATA%\frakpanel` or
 `~/.local/share/frakpanel`, and the panel shows three clocks and the column.
@@ -188,6 +192,11 @@ first two minutes, the launcher rolls back to the previous one and the updater
 skips that release. `curl http://<panel-host>:7781/version` shows the running
 version, the channel, and the last check. The kiosk browser is untouched by
 an update.
+
+On Windows every version runs on the install's one `runtime\pythonw.exe`, so
+the firewall rule never changes. That also means an update never changes
+Python: when a release moves to a newer Python (`PY_EMBED` in the workflow),
+rerun its installer to bring `runtime\` up to date.
 
 ## Security
 

@@ -10,7 +10,8 @@
 #   frakpanel-shot   on demand only: desktop screenshot to edge-shot.png
 #                    (see edge-shot.ps1).
 # Run as the user who stays logged in at the panel (the kiosk needs that
-# user's interactive desktop, so this cannot be a service):
+# user's interactive desktop, so this cannot be a service), from an elevated
+# PowerShell so it can add the firewall rule (see below):
 #   powershell -ExecutionPolicy Bypass -File install-windows.ps1
 # Needs Google Chrome. Updates are off until data\update.json picks a channel
 # (README, "Releases and updates").
