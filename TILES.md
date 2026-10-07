@@ -254,6 +254,7 @@ Tools:
 | tool | arguments | does |
 |---|---|---|
 | `register_tile` | `url`, `title` | adds the tile (or retitles it if the `url` is already registered). `url` must start with `http://` or `https://` and `title` must not be empty, else the call returns a tool error and nothing is registered. |
+| `frakpanel_guide` | none | returns an intro to frakpanel and its MCP tools, this guide (read from the installed version) and the source of `examples/self_hosted_tile.py`; an MCP client on another machine should call it first |
 | `list_tiles` | none | the tiles registered through MCP |
 | `remove_tile` | `url` | removes that registered tile |
 

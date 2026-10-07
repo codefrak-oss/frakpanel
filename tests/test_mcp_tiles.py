@@ -45,7 +45,7 @@ class McpTest(unittest.TestCase):
         self.assertIn("tools", init["capabilities"])
         self.assertIsNone(self.server.handle(b'{"jsonrpc":"2.0","method":"notifications/initialized"}'))
         names = {t["name"] for t in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(names, {"register_tile", "list_tiles", "remove_tile"})
+        self.assertEqual(names, {"frakpanel_guide", "register_tile", "list_tiles", "remove_tile"})
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.server.handle(b"{bad")["error"]["code"], -32700)
 
@@ -59,6 +59,28 @@ class McpTest(unittest.TestCase):
         self.assertFalse(res["isError"])
         self.assertEqual(self.call("list_tiles")[1], {"tiles": []})
         self.assertTrue(self.call("remove_tile", url=TILE["url"])[0]["isError"])
+
+    def test_guide(self):
+        tool = next(t for t in self.rpc("tools/list")["result"]["tools"] if t["name"] == "frakpanel_guide")
+        self.assertIn("first", tool["description"])
+        self.assertFalse(tool["inputSchema"].get("required"))
+        res = self.rpc("tools/call", {"name": "frakpanel_guide"})["result"]
+        self.assertFalse(res["isError"])
+        text = res["content"][0]["text"]
+        with open(os.path.join(mcp_tiles.HERE, "TILES.md"), encoding="utf-8") as f:
+            self.assertIn(f.read(), text)
+        self.assertIn("examples/self_hosted_tile.py", text)
+        self.assertIn("def ", text.split("# examples/self_hosted_tile.py")[1])
+        self.assertIn("X-Frame-Options", text)
+
+    def test_guide_missing(self):
+        old = mcp_tiles.HERE
+        mcp_tiles.HERE = self.dir.name
+        try:
+            res = self.rpc("tools/call", {"name": "frakpanel_guide", "arguments": {}})["result"]
+        finally:
+            mcp_tiles.HERE = old
+        self.assertTrue(res["isError"])
 
     def test_persists_across_restart(self):
         self.call("register_tile", **TILE)
