@@ -12,12 +12,44 @@ or None when windows cannot be managed), running(), launch(flags), kill().
 """
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(os.environ.get("LOCALAPPDATA", HERE), "frakpanel-kiosk")
 CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+# edge-shot.ps1's capture (the whole virtual screen, DPI-aware), written to stdout as base64 PNG.
+SHOT_PS = r"""
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+Add-Type 'using System.Runtime.InteropServices; public static class Dpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'
+[Dpi]::SetProcessDPIAware() | Out-Null
+$b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+$ms = New-Object System.IO.MemoryStream
+$bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+$g.Dispose(); $bmp.Dispose()
+[Console]::Out.Write([Convert]::ToBase64String($ms.ToArray()))
+"""
+
+
+def screenshot() -> bytes:
+    """The interactive desktop edged runs in (it starts at logon in the user's session) as PNG
+    bytes, as edge-shot.ps1 takes it. OSError when it fails."""
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", SHOT_PS],
+                           capture_output=True, text=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.SubprocessError as exc:
+        raise OSError(f"powershell failed: {exc}") from exc
+    if r.returncode != 0:
+        raise OSError(f"powershell exited {r.returncode}: {r.stderr.strip()}")
+    try:
+        return base64.b64decode(r.stdout.strip(), validate=True)
+    except ValueError as exc:
+        raise OSError(f"the capture was not base64: {exc}") from exc
 
 
 def browser_running() -> bool:

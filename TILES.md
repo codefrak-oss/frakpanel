@@ -267,6 +267,7 @@ Tools:
 | `remove_tile` | `url` | removes that registered tile |
 | `get_layout` | none | `{"slots": [url, url, url]}`: what the panel shows in slots 0-2 (`""` is the clock), as `GET /tiles` reports them |
 | `set_slot` | `slot` (0-2), `url` | changes what the panel shows: puts `url` (`""` for the clock, `relay://<name>/<path>` or an http(s) URL) in that slot, exactly like `POST /slot`, and returns the new `{"slots": [...]}`. A bad slot or url returns a tool error and leaves the layout unchanged. |
+| `screenshot` | none | a PNG of what the panel host's screen shows right now (every screen, the Edge included), as an MCP image content item (`type` `image`, `mimeType` `image/png`, base64 `data`). On Linux it needs ImageMagick's `import` (`install-linux.sh` installs it); on Windows it uses PowerShell, like `edge-shot.ps1`. A failed capture returns a tool error. |
 
 Connect a client, e.g. Claude Code:
 

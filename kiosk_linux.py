@@ -40,6 +40,7 @@ PROFILE_DIR = os.path.join(DATA_HOME, "frakpanel-kiosk")
 EDGE_MODE = (2560, 720)  # the Xeneon Edge's native mode
 TITLE = "^frakpanel shell"  # the shell page's <title>
 TOOL_TIMEOUT = 5
+SHOT_TIMEOUT = 20
 
 
 def run(*args: str) -> str | None:
@@ -48,6 +49,21 @@ def run(*args: str) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 else None
+
+
+def screenshot() -> bytes:
+    """The whole X display edged runs on (every screen, the Edge included) as PNG bytes,
+    as edge-shot.sh takes it. Needs ImageMagick's import; OSError when it fails."""
+    if not shutil.which("import"):
+        raise OSError("ImageMagick's import is not installed (apt install imagemagick)")
+    try:
+        r = subprocess.run(["import", "-window", "root", "png:-"], capture_output=True, timeout=SHOT_TIMEOUT,
+                           env=dict(os.environ, DISPLAY=os.environ.get("DISPLAY", ":0")))
+    except subprocess.SubprocessError as exc:
+        raise OSError(f"import failed: {exc}") from exc
+    if r.returncode != 0:
+        raise OSError(f"import exited {r.returncode}: {r.stderr.decode(errors='replace').strip()}")
+    return r.stdout
 
 
 def edge_position() -> tuple[int, int] | None:

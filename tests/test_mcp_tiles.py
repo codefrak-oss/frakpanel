@@ -1,4 +1,5 @@
 """Tests for the MCP tile server: python3 -m unittest discover -s tests"""
+import base64
 import http.client
 import json
 import os
@@ -46,7 +47,7 @@ class McpTest(unittest.TestCase):
         self.assertIsNone(self.server.handle(b'{"jsonrpc":"2.0","method":"notifications/initialized"}'))
         names = {t["name"] for t in self.rpc("tools/list")["result"]["tools"]}
         self.assertEqual(names, {"frakpanel_guide", "register_tile", "list_tiles", "remove_tile",
-                                 "get_layout", "set_slot"})
+                                 "get_layout", "set_slot", "screenshot"})
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.server.handle(b"{bad")["error"]["code"], -32700)
 
@@ -87,6 +88,27 @@ class McpTest(unittest.TestCase):
         self.call("register_tile", **TILE)
         restarted = self.make()
         self.assertEqual(self.call("list_tiles", server=restarted)[1], {"tiles": [TILE]})
+
+    def test_screenshot(self):
+        png = mcp_tiles.PNG_SIGNATURE + b"fake image"
+        server = mcp_tiles.McpServer(mcp_tiles.TileRegistry(self.path), "test", capture=lambda: png)
+        res = self.rpc("tools/call", {"name": "screenshot", "arguments": {}}, server)["result"]
+        self.assertFalse(res["isError"])
+        self.assertEqual(len(res["content"]), 1)
+        item = res["content"][0]
+        self.assertEqual((item["type"], item["mimeType"]), ("image", "image/png"))
+        self.assertTrue(base64.b64decode(item["data"]).startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_screenshot_fails(self):
+        def broken():
+            raise OSError("no display")
+        server = mcp_tiles.McpServer(mcp_tiles.TileRegistry(self.path), "test", capture=broken)
+        res, text = self.call("screenshot", server)
+        self.assertTrue(res["isError"])
+        self.assertIn("no display", text)
+        res, text = self.call("screenshot")  # no capturer configured
+        self.assertTrue(res["isError"])
+        self.assertIn("no screen capture", text)
 
     def test_invalid_input_registers_nothing(self):
         self.call("register_tile", **TILE)
@@ -188,7 +210,7 @@ class Mcp20260728Test(unittest.TestCase):
         self.assertEqual(res["cacheScope"], "public")
         self.assertIsInstance(res["ttlMs"], int)
         self.assertEqual([t["name"] for t in res["tools"]],
-                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile", "get_layout", "set_slot"])
+                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile", "get_layout", "set_slot", "screenshot"])
         status, out = self.post("tools/call", {"name": "register_tile", "arguments": TILE})
         self.assertEqual(status, 200)
         self.assertEqual(out["result"]["resultType"], "complete")

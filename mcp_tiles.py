@@ -18,9 +18,11 @@ Protocol versions (PROTOCOL_VERSIONS), dual-era per the 2026-07-28 spec:
   batch allowed; a POST with no MCP-Protocol-Version header is legacy.
 
 Tools: frakpanel_guide, register_tile {url, title}, list_tiles, remove_tile {url},
-get_layout, set_slot {slot, url}. get_layout/set_slot read and change which
-tile each of the panel's slots 0-2 shows, through edged's Layout (passed in,
-so validation and persistence are exactly POST /slot's).
+get_layout, set_slot {slot, url}, screenshot. get_layout/set_slot read and
+change which tile each of the panel's slots 0-2 shows, through edged's Layout
+(passed in, so validation and persistence are exactly POST /slot's).
+screenshot returns the panel host's screen as a PNG image item, through a
+capture callable passed in (edged gives it kiosk_platform.screenshot).
 frakpanel_guide serves TILES.md and examples/self_hosted_tile.py from the
 installed version's folder (the installers and release zips ship the tree).
 Registrations live in mcp_tiles.json in $FRAKPANEL_DATA, apart from the
@@ -38,6 +40,7 @@ META_VERSION = "io.modelcontextprotocol/protocolVersion"
 HEADER_MISMATCH = -32020
 UNSUPPORTED_VERSION = -32022
 TOOLS_TTL_MS = 3600000  # the tool list only changes with an edged upgrade
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 GUIDE_INTRO = """# frakpanel: orientation for an MCP client
@@ -54,6 +57,7 @@ This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
 - list_tiles / remove_tile {url}: see and remove tiles registered here.
 - get_layout: the URL shown in each panel slot 0-2 ("" is the clock).
 - set_slot {slot, url}: change what the panel shows in slot 0, 1 or 2.
+- screenshot: a PNG image of what the panel host's screen shows right now.
 
 To add a tile backed by your own web server: either frame an existing page
 (Route A/M below), or run a small tile server that fetches the upstream API
@@ -199,11 +203,18 @@ TOOLS = [
             "required": ["slot", "url"],
         },
     },
+    {
+        "name": "screenshot",
+        "description": "A PNG screenshot of what the panel host's screen (the Edge panel included) shows right now, "
+                       "as an image content item.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
 INSTRUCTIONS = ("Register URL tiles for the frakpanel tile picker, and choose which tile the panel shows in "
-                "each slot 0-2 (get_layout, set_slot: set_slot changes what the panel shows). Call "
+                "each slot 0-2 (get_layout, set_slot: set_slot changes what the panel shows), and "
+                "see the screen with screenshot. Call "
                 "frakpanel_guide first to learn what frakpanel is and how to build tiles. No auth; LAN only.")
 
 
@@ -213,8 +224,9 @@ def _text(obj, error: bool = False) -> dict:
 
 
 class McpServer:
-    def __init__(self, registry: TileRegistry, version: str, log=lambda msg: None, layout=None):
+    def __init__(self, registry: TileRegistry, version: str, log=lambda msg: None, layout=None, capture=None):
         self.registry = registry
+        self.capture = capture  # () -> PNG bytes, raising OSError on failure; None leaves screenshot erroring
         self.layout = layout  # edged.Layout: get() and set_slot({slot, url}); None leaves the layout tools erroring
         self.version = version
         self.log = log
@@ -247,9 +259,23 @@ class McpServer:
                 slots = self.layout.set_slot({"slot": args.get("slot"), "url": args.get("url")})
                 self.log(f"mcp set_slot {args.get('slot')} {args.get('url')!r}")
                 return _text({"slots": slots})
+            if name == "screenshot":
+                return self.screenshot()
         except ValueError as exc:
             return _text(str(exc), error=True)
         raise KeyError(name)
+
+    def screenshot(self) -> dict:
+        if self.capture is None:
+            return _text("no screen capture is available on this panel host", error=True)
+        try:
+            png = self.capture()
+        except Exception as exc:  # a capture failure is the caller's error, never the server's
+            return _text(f"the screen could not be captured: {exc}", error=True)
+        if not isinstance(png, bytes) or not png.startswith(PNG_SIGNATURE):
+            return _text("the screen capture did not produce a PNG", error=True)
+        return {"content": [{"type": "image", "data": base64.b64encode(png).decode("ascii"),
+                             "mimeType": "image/png"}], "isError": False}
 
     def handle_one(self, msg) -> dict | None:
         """One JSON-RPC message in; its response out, or None for a notification."""
