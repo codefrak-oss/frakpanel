@@ -101,6 +101,117 @@ class McpTest(unittest.TestCase):
         self.assertEqual(self.call("list_tiles")[1], {"tiles": [TILE]})
 
 
+MODERN = "2026-07-28"
+
+
+class Mcp20260728Test(unittest.TestCase):
+    """The stateless 2026-07-28 protocol: per-request _meta, mirrored headers, server/discover."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.server = mcp_tiles.McpServer(mcp_tiles.TileRegistry(os.path.join(self.dir.name, "t.json")), "test")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def post(self, method, params=None, version=MODERN, headers=None, name=None):
+        params = dict(params or {}, _meta={mcp_tiles.META_VERSION: version,
+                                          "io.modelcontextprotocol/clientCapabilities": {}})
+        if headers is None:
+            headers = {"MCP-Protocol-Version": version, "Mcp-Method": method}
+            if method == "tools/call":
+                headers["Mcp-Name"] = name if name is not None else params["name"]
+        return self.server.respond(json.dumps({"jsonrpc": "2.0", "id": 7, "method": method,
+                                               "params": params}).encode(), headers)
+
+    def test_versions(self):
+        self.assertEqual(mcp_tiles.PROTOCOL_VERSIONS[0], MODERN)
+        self.assertIn("2025-06-18", mcp_tiles.PROTOCOL_VERSIONS)
+        self.assertIn("2025-03-26", mcp_tiles.PROTOCOL_VERSIONS)
+
+    def test_discover(self):
+        status, out = self.post("server/discover")
+        self.assertEqual(status, 200)
+        res = out["result"]
+        self.assertEqual(res["supportedVersions"][0], MODERN)
+        self.assertEqual(res["resultType"], "complete")
+        self.assertIn("tools", res["capabilities"])
+        self.assertEqual(res["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "frakpanel")
+
+    def test_tools_list_and_call(self):
+        status, out = self.post("tools/list")
+        self.assertEqual(status, 200)
+        res = out["result"]
+        self.assertEqual(res["resultType"], "complete")
+        self.assertEqual(res["cacheScope"], "public")
+        self.assertIsInstance(res["ttlMs"], int)
+        self.assertEqual([t["name"] for t in res["tools"]],
+                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile"])
+        status, out = self.post("tools/call", {"name": "register_tile", "arguments": TILE})
+        self.assertEqual(status, 200)
+        self.assertEqual(out["result"]["resultType"], "complete")
+        self.assertFalse(out["result"]["isError"])
+        self.assertIn("io.modelcontextprotocol/serverInfo", out["result"]["_meta"])
+        self.assertEqual(self.server.registry.list(), [TILE])
+
+    def test_mcp_name_base64(self):
+        status, out = self.post("tools/call", {"name": "list_tiles", "arguments": {}},
+                                name="=?base64?bGlzdF90aWxlcw==?=")
+        self.assertEqual(status, 200, out)
+
+    def test_unsupported_version(self):
+        for version in ("1900-01-01", "2025-06-18"):  # 2025-06-18 is initialize-era, not per-request _meta
+            status, out = self.post("tools/list", version=version)
+            self.assertEqual(status, 400)
+            self.assertEqual(out["error"]["code"], -32022)
+            self.assertEqual(out["error"]["data"], {"supported": list(mcp_tiles.PROTOCOL_VERSIONS),
+                                                    "requested": version})
+
+    def test_unknown_header_version(self):
+        status, out = self.server.respond(b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+                                          {"MCP-Protocol-Version": "2099-01-01"})
+        self.assertEqual((status, out["error"]["code"]), (400, -32022))
+
+    def test_header_mismatch(self):
+        cases = [
+            {"Mcp-Method": "tools/list"},  # MCP-Protocol-Version missing
+            {"MCP-Protocol-Version": MODERN},  # Mcp-Method missing
+            {"MCP-Protocol-Version": MODERN, "Mcp-Method": "tools/call"},  # wrong method
+        ]
+        for headers in cases:
+            status, out = self.post("tools/list", headers=headers)
+            self.assertEqual((status, out["error"]["code"]), (400, -32020), headers)
+        status, out = self.post("tools/call", {"name": "list_tiles", "arguments": {}}, name="remove_tile")
+        self.assertEqual((status, out["error"]["code"]), (400, -32020))
+        status, out = self.post("tools/call", {"name": "list_tiles", "arguments": {}},
+                                headers={"mcp-protocol-version": MODERN, "mcp-method": "tools/call"})
+        self.assertEqual((status, out["error"]["code"]), (400, -32020))  # Mcp-Name missing
+        status, out = self.server.respond(b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+                                          {"MCP-Protocol-Version": MODERN, "Mcp-Method": "tools/list"})
+        self.assertEqual((status, out["error"]["code"]), (400, -32020))  # header says modern, body has no _meta
+
+    def test_removed_methods_are_404(self):
+        for method in ("initialize", "ping", "nope"):
+            status, out = self.post(method)
+            self.assertEqual((status, out["error"]["code"]), (404, -32601), method)
+
+    def test_legacy_initialize(self):
+        def init(asked):
+            status, out = self.server.respond(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                                          "params": {"protocolVersion": asked}}).encode(), {})
+            self.assertEqual(status, 200)
+            return out["result"]["protocolVersion"]
+        self.assertEqual(init("2025-06-18"), "2025-06-18")
+        self.assertEqual(init("2025-03-26"), "2025-03-26")
+        # 2026-07-28 has no initialize, so a handshake can only settle on a legacy version
+        self.assertEqual(init(MODERN), "2025-06-18")
+        self.assertEqual(init("1900-01-01"), "2025-06-18")
+        status, out = self.server.respond(b'{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+                                          {"MCP-Protocol-Version": "2025-06-18"})
+        self.assertEqual(status, 200)
+        self.assertNotIn("resultType", out["result"])
+
+
 class EdgedHttpTest(unittest.TestCase):
     """POST /mcp then GET /tiles on edged's own Handler, no restart."""
 
@@ -128,9 +239,9 @@ class EdgedHttpTest(unittest.TestCase):
         self.addCleanup(srv.shutdown)
         port = srv.server_address[1]
 
-        def req(method, url, body=None):
+        def req(method, url, body=None, headers=None):
             c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            c.request(method, url, body, {"Content-Type": "application/json"})
+            c.request(method, url, body, dict(headers or {}, **{"Content-Type": "application/json"}))
             r = c.getresponse()
             data = r.read()
             c.close()
@@ -143,6 +254,14 @@ class EdgedHttpTest(unittest.TestCase):
         status, _ = req("POST", "/mcp", '{"jsonrpc":"2.0","method":"notifications/initialized"}')
         self.assertEqual(status, 202)
         self.assertEqual(req("GET", "/mcp")[0], 405)
+        modern = {"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"}
+        body = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+                           "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}})
+        status, data = req("POST", "/mcp", body, modern)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["result"]["resultType"], "complete")
+        status, data = req("POST", "/mcp", body, dict(modern, **{"Mcp-Method": "tools/call"}))
+        self.assertEqual((status, json.loads(data)["error"]["code"]), (400, -32020))
         tiles = json.loads(req("GET", "/tiles")[1])["tiles"]
         self.assertIn(dict(TILE, online=True), tiles)
 

@@ -245,6 +245,14 @@ serves an MCP server on its own port:
 - **Transport:** Streamable HTTP, stateless: every request is a `POST` of one
   JSON-RPC message answered with `application/json`. No session id, no SSE
   stream (`GET /mcp` answers 405).
+- **Protocol versions:** `2026-07-28` (preferred), `2025-06-18` and
+  `2025-03-26`. A 2026-07-28 client sends no `initialize`: each request names
+  the version in `params._meta["io.modelcontextprotocol/protocolVersion"]` and
+  in the `MCP-Protocol-Version` header, with `Mcp-Method` (and `Mcp-Name` for
+  `tools/call`) headers matching the body, else `400`; `server/discover`
+  lists the versions. An older client's `initialize` negotiates `2025-06-18`
+  or `2025-03-26`; a POST with no `MCP-Protocol-Version` header (like the
+  curl below) is served as an older client.
 - **No authentication.** Like the rest of `edged`'s API, it trusts the LAN:
   anything that can reach port 7781 can add or remove tiles. Don't expose
   the port beyond the LAN.

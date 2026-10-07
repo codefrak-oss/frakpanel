@@ -1,9 +1,21 @@
 """MCP server for registering URL tiles in the panel's picker, served by edged.
 
-Transport: MCP Streamable HTTP at POST /mcp on edged's port (7781), stateless:
-each POST is one JSON-RPC 2.0 message (or a batch) answered with
-application/json; no sessions, no SSE stream (GET /mcp is 405). No auth, like
-the rest of edged: anything on the LAN can register a tile.
+Transport: MCP Streamable HTTP at POST /mcp on edged's port (7781), stateless,
+answered with application/json; no sessions, no SSE stream (GET /mcp is 405).
+No auth, like the rest of edged: anything on the LAN can register a tile.
+
+Protocol versions (PROTOCOL_VERSIONS), dual-era per the 2026-07-28 spec:
+- 2026-07-28 (modern, preferred): no initialize; every request names its
+  version in params._meta["io.modelcontextprotocol/protocolVersion"] and in the
+  MCP-Protocol-Version header, plus Mcp-Method (and Mcp-Name for tools/call)
+  headers that must match the body (else 400, HeaderMismatch -32020). One
+  message per POST. server/discover lists the versions; an unsupported version
+  is 400 UnsupportedProtocolVersion -32022, an unknown method 404 -32601.
+  Results carry resultType "complete" and serverInfo in _meta; tools/list
+  carries ttlMs and cacheScope.
+- 2025-06-18 and 2025-03-26 (legacy): initialize negotiates one of them (a
+  client asking for anything else gets 2025-06-18), then plain JSON-RPC, a
+  batch allowed; a POST with no MCP-Protocol-Version header is legacy.
 
 Tools: frakpanel_guide, register_tile {url, title}, list_tiles, remove_tile {url}.
 frakpanel_guide serves TILES.md and examples/self_hosted_tile.py from the
@@ -11,11 +23,18 @@ installed version's folder (the installers and release zips ship the tree).
 Registrations live in mcp_tiles.json in $FRAKPANEL_DATA, apart from the
 hand-edited local_tiles.json; GET /tiles reads them live, so no restart.
 """
+import base64
 import json
 import os
 import threading
 
-PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")
+PROTOCOL_VERSIONS = ("2026-07-28", "2025-06-18", "2025-03-26")
+MODERN_VERSIONS = ("2026-07-28",)  # stateless, per-request _meta, no initialize
+LEGACY_VERSIONS = tuple(v for v in PROTOCOL_VERSIONS if v not in MODERN_VERSIONS)  # initialize handshake
+META_VERSION = "io.modelcontextprotocol/protocolVersion"
+HEADER_MISMATCH = -32020
+UNSUPPORTED_VERSION = -32022
+TOOLS_TTL_MS = 3600000  # the tool list only changes with an edged upgrade
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 GUIDE_INTRO = """# frakpanel: orientation for an MCP client
@@ -159,6 +178,10 @@ TOOLS = [
 ]
 
 
+INSTRUCTIONS = ("Register URL tiles for the frakpanel tile picker. Call frakpanel_guide first to learn "
+                "what frakpanel is and how to build tiles. No auth; LAN only.")
+
+
 def _text(obj, error: bool = False) -> dict:
     text = obj if isinstance(obj, str) else json.dumps(obj)
     return {"content": [{"type": "text", "text": text}], "isError": error}
@@ -206,14 +229,13 @@ class McpServer:
         params = msg.get("params") or {}
         if not isinstance(params, dict):
             return _error(mid, -32602, "params must be an object")
-        if method == "initialize":
+        if method == "initialize":  # legacy only: 2026-07-28 has no handshake
             asked = params.get("protocolVersion")
             return _result(mid, {
-                "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
+                "protocolVersion": asked if asked in LEGACY_VERSIONS else LEGACY_VERSIONS[0],
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "frakpanel", "version": self.version},
-                "instructions": "Register URL tiles for the frakpanel tile picker. Call frakpanel_guide first to learn "
-                                "what frakpanel is and how to build tiles. No auth; LAN only.",
+                "serverInfo": self.server_info(),
+                "instructions": INSTRUCTIONS,
             })
         if method == "ping":
             return _result(mid, {})
@@ -229,8 +251,69 @@ class McpServer:
                 return _error(mid, -32602, f"unknown tool {name!r}")
         return _error(mid, -32601, f"method not found: {method}")
 
+    def server_info(self) -> dict:
+        return {"name": "frakpanel", "version": self.version}
+
+    def handle_modern(self, msg: dict, headers) -> tuple[int, dict | None]:
+        """One 2026-07-28 message (its _meta names a modern version) in; (HTTP status, JSON or None)."""
+        mid, method, params = msg.get("id"), msg["method"], msg.get("params")
+        version = params["_meta"][META_VERSION]
+        if version not in MODERN_VERSIONS:
+            return 400, _error(mid, UNSUPPORTED_VERSION, "Unsupported protocol version",
+                               {"supported": list(PROTOCOL_VERSIONS), "requested": version})
+        if "id" not in msg:
+            return 202, None  # 2026-07-28 defines no client notifications over HTTP; accept and ignore
+        expect = {"MCP-Protocol-Version": version, "Mcp-Method": method}
+        if method == "tools/call":
+            expect["Mcp-Name"] = params.get("name")
+        for name, want in expect.items():
+            got = _header(headers, name)
+            if got is None:
+                return 400, _error(mid, HEADER_MISMATCH, f"Header mismatch: {name} header missing")
+            if name == "Mcp-Name":
+                got = _decode_header(got)
+            if got != want:
+                return 400, _error(mid, HEADER_MISMATCH,
+                                   f"Header mismatch: {name} header value {got!r} does not match body value {want!r}")
+        meta = {"io.modelcontextprotocol/serverInfo": self.server_info()}
+        if method == "server/discover":
+            return 200, _result(mid, {"resultType": "complete", "supportedVersions": list(PROTOCOL_VERSIONS),
+                                      "capabilities": {"tools": {}}, "instructions": INSTRUCTIONS,
+                                      "ttlMs": TOOLS_TTL_MS, "cacheScope": "public", "_meta": meta})
+        if method == "tools/list":
+            return 200, _result(mid, {"resultType": "complete", "tools": TOOLS,
+                                      "ttlMs": TOOLS_TTL_MS, "cacheScope": "public", "_meta": meta})
+        if method == "tools/call":
+            out = self.handle_one(msg)
+            if "result" in out:
+                out["result"] = dict(out["result"], resultType="complete", _meta=meta)
+            return 200, out
+        return 404, _error(mid, -32601, f"method not found: {method}")
+
+    def respond(self, raw: bytes, headers=None) -> tuple[int, dict | list | None]:
+        """A POST body and its headers in; (HTTP status, the JSON to answer with or None for no body)."""
+        headers = headers or {}
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            return 200, _error(None, -32700, "parse error")
+        asked = _header(headers, "MCP-Protocol-Version")
+        if asked is not None and asked not in PROTOCOL_VERSIONS:
+            mid = msg.get("id") if isinstance(msg, dict) else None
+            return 400, _error(mid, UNSUPPORTED_VERSION, "Unsupported protocol version",
+                               {"supported": list(PROTOCOL_VERSIONS), "requested": asked})
+        modern = _modern(msg)
+        if modern or asked in MODERN_VERSIONS:
+            if not modern:
+                mid = msg.get("id") if isinstance(msg, dict) else None
+                return 400, _error(mid, HEADER_MISMATCH, f"Header mismatch: MCP-Protocol-Version {asked} needs "
+                                   f"params._meta[{META_VERSION!r}] and a single JSON-RPC request")
+            return self.handle_modern(msg, headers)
+        out = self.handle(raw)
+        return (202, None) if out is None else (200, out)
+
     def handle(self, raw: bytes) -> dict | list | None:
-        """A POST body in; the JSON to answer with, or None (answer 202)."""
+        """A legacy (initialize-era) POST body in; the JSON to answer with, or None (answer 202)."""
         try:
             msg = json.loads(raw)
         except ValueError:
@@ -245,5 +328,37 @@ def _result(mid, result) -> dict:
     return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
-def _error(mid, code: int, message: str) -> dict:
-    return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
+def _error(mid, code: int, message: str, data=None) -> dict:
+    error = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": mid, "error": error}
+
+
+def _modern(msg) -> bool:
+    """A single JSON-RPC request whose params._meta names a protocol version (2026-07-28 style)."""
+    if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" or not isinstance(msg.get("method"), str):
+        return False
+    params = msg.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    return isinstance(meta, dict) and isinstance(meta.get(META_VERSION), str)
+
+
+def _header(headers, name: str) -> str | None:
+    """A request header by case-insensitive name; headers is a dict or an http.client.HTTPMessage."""
+    if hasattr(headers, "get_all"):
+        return headers.get(name)
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def _decode_header(value: str) -> str | None:
+    """Undoes the spec's =?base64?...?= sentinel encoding of a header value."""
+    if value.startswith("=?base64?") and value.endswith("?="):
+        try:
+            return base64.b64decode(value[len("=?base64?"):-2], validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return None
+    return value
