@@ -254,7 +254,7 @@ serves an MCP server on its own port:
   or `2025-03-26`; a POST with no `MCP-Protocol-Version` header (like the
   curl below) is served as an older client.
 - **No authentication.** Like the rest of `edged`'s API, it trusts the LAN:
-  anything that can reach port 7781 can add or remove tiles. Don't expose
+  anything that can reach port 7781 can add or remove tiles and change the slots. Don't expose
   the port beyond the LAN.
 
 Tools:
@@ -265,6 +265,8 @@ Tools:
 | `frakpanel_guide` | none | returns an intro to frakpanel and its MCP tools, this guide (read from the installed version) and the source of `examples/self_hosted_tile.py`; an MCP client on another machine should call it first |
 | `list_tiles` | none | the tiles registered through MCP |
 | `remove_tile` | `url` | removes that registered tile |
+| `get_layout` | none | `{"slots": [url, url, url]}`: what the panel shows in slots 0-2 (`""` is the clock), as `GET /tiles` reports them |
+| `set_slot` | `slot` (0-2), `url` | changes what the panel shows: puts `url` (`""` for the clock, `relay://<name>/<path>` or an http(s) URL) in that slot, exactly like `POST /slot`, and returns the new `{"slots": [...]}`. A bad slot or url returns a tool error and leaves the layout unchanged. |
 
 Connect a client, e.g. Claude Code:
 

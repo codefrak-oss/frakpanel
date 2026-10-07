@@ -45,7 +45,8 @@ class McpTest(unittest.TestCase):
         self.assertIn("tools", init["capabilities"])
         self.assertIsNone(self.server.handle(b'{"jsonrpc":"2.0","method":"notifications/initialized"}'))
         names = {t["name"] for t in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(names, {"frakpanel_guide", "register_tile", "list_tiles", "remove_tile"})
+        self.assertEqual(names, {"frakpanel_guide", "register_tile", "list_tiles", "remove_tile",
+                                 "get_layout", "set_slot"})
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.server.handle(b"{bad")["error"]["code"], -32700)
 
@@ -101,6 +102,47 @@ class McpTest(unittest.TestCase):
         self.assertEqual(self.call("list_tiles")[1], {"tiles": [TILE]})
 
 
+class McpLayoutTest(McpTest):
+    """get_layout / set_slot on edged's real Layout, persisted to a temp layout file."""
+
+    def make(self):
+        import edged
+        old = edged.LAYOUT_PATH
+        edged.LAYOUT_PATH = self.layout_path = os.path.join(self.dir.name, "layout.json")
+        self.addCleanup(setattr, edged, "LAYOUT_PATH", old)
+        return mcp_tiles.McpServer(mcp_tiles.TileRegistry(self.path), "test", layout=edged.Layout())
+
+    def test_get_layout(self):
+        self.assertEqual(self.call("get_layout")[1], {"slots": ["", "", ""]})
+
+    def test_set_slot(self):
+        res, out = self.call("set_slot", slot=1, url=TILE["url"])
+        self.assertFalse(res["isError"])
+        self.assertEqual(out, {"slots": ["", TILE["url"], ""]})
+        self.assertEqual(self.call("get_layout")[1], out)
+        with open(self.layout_path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), out)
+        self.assertEqual(self.call("set_slot", slot=1, url="")[1], {"slots": ["", "", ""]})
+
+    def test_set_slot_rejected(self):
+        self.call("set_slot", slot=0, url=TILE["url"])
+        for args in ({"slot": 3, "url": ""}, {"slot": -1, "url": ""}, {"slot": "1", "url": ""},
+                     {"slot": True, "url": ""}, {"url": ""}, {"slot": 1, "url": "ftp://x/"}):
+            res, msg = self.call("set_slot", **args)
+            self.assertTrue(res["isError"], args)
+        self.assertIn("slot must be an integer 0-2", self.call("set_slot", slot=3, url="")[1])
+        self.assertEqual(self.call("get_layout")[1], {"slots": [TILE["url"], "", ""]})
+
+    def test_modern_set_slot(self):
+        body = {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                "params": {"name": "set_slot", "arguments": {"slot": 2, "url": TILE["url"]},
+                           "_meta": {mcp_tiles.META_VERSION: MODERN}}}
+        status, out = self.server.respond(json.dumps(body).encode(), {
+            "MCP-Protocol-Version": MODERN, "Mcp-Method": "tools/call", "Mcp-Name": "set_slot"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(out["result"]["content"][0]["text"]), {"slots": ["", "", TILE["url"]]})
+
+
 MODERN = "2026-07-28"
 
 
@@ -146,7 +188,7 @@ class Mcp20260728Test(unittest.TestCase):
         self.assertEqual(res["cacheScope"], "public")
         self.assertIsInstance(res["ttlMs"], int)
         self.assertEqual([t["name"] for t in res["tools"]],
-                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile"])
+                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile", "get_layout", "set_slot"])
         status, out = self.post("tools/call", {"name": "register_tile", "arguments": TILE})
         self.assertEqual(status, 200)
         self.assertEqual(out["result"]["resultType"], "complete")
