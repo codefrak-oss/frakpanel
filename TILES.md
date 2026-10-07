@@ -201,7 +201,8 @@ The common case the contract above doesn't spell out: the data lives on a
 LAN service (a NAS, Grafana, Jellyfin, a home-grown API), not on the laptop
 running the relay. Two routes, depending on whether that service already
 serves a page you want shown as-is, or you want to build a small tile on top
-of its API.
+of its API. (Route M below is Route A without the file edit and restart:
+register the URL through edged's MCP server.)
 
 ### Route A: frame the page directly, no relay
 
@@ -233,6 +234,48 @@ they're usually the ones that *want* to be embedded):
   `X-Frame-Options` itself (nginx's `proxy_hide_header` / a custom `add_header`).
 - Something you don't control the config of: it can't be framed; use Route B
   instead, fetching its API from a small tile you do control.
+
+### Route M: register the page through MCP, no file, no restart
+
+Same kind of tile as Route A (a URL the panel host frames directly), but
+registered by an MCP client instead of by editing `local_tiles.json`. `edged`
+serves an MCP server on its own port:
+
+- **Address:** `http://<panel-host>:7781/mcp`
+- **Transport:** Streamable HTTP, stateless: every request is a `POST` of one
+  JSON-RPC message answered with `application/json`. No session id, no SSE
+  stream (`GET /mcp` answers 405).
+- **No authentication.** Like the rest of `edged`'s API, it trusts the LAN:
+  anything that can reach port 7781 can add or remove tiles. Don't expose
+  the port beyond the LAN.
+
+Tools:
+
+| tool | arguments | does |
+|---|---|---|
+| `register_tile` | `url`, `title` | adds the tile (or retitles it if the `url` is already registered). `url` must start with `http://` or `https://` and `title` must not be empty, else the call returns a tool error and nothing is registered. |
+| `list_tiles` | none | the tiles registered through MCP |
+| `remove_tile` | `url` | removes that registered tile |
+
+Connect a client, e.g. Claude Code:
+
+```sh
+claude mcp add --transport http frakpanel http://<panel-host>:7781/mcp
+```
+
+then ask it to register `https://engine.k8s.lund/frakpanel/tiles/ai-accounts`
+titled "AI accounts". Or, by hand:
+
+```sh
+curl -XPOST http://<panel-host>:7781/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+  "params":{"name":"register_tile","arguments":{"url":"https://engine.k8s.lund/frakpanel/tiles/ai-accounts","title":"AI accounts"}}}'
+```
+
+The tile is in `GET /tiles` (and the picker) at once, after the clock and the
+`local_tiles.json` entries. Registrations are kept in `mcp_tiles.json` in the
+data folder (beside `edge_layout.json`), so they survive restarts; MCP only
+manages that file, never `local_tiles.json`. The framing caveats of Route A
+apply.
 
 ### Route B: a small tile that fetches the API server-side
 

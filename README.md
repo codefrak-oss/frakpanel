@@ -101,7 +101,8 @@ curl http://<panel-host>:7781/tiles       # what the picker offers
 ```
 
 [`TILES.md`](TILES.md) has the tile contract, previewing, and keeping a tile
-running with launchd.
+running with launchd, and how an MCP client registers a URL tile through
+edged's unauthenticated MCP server at `http://<panel-host>:7781/mcp`.
 
 ## How it works
 

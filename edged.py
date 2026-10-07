@@ -33,6 +33,10 @@ Two jobs in one process:
                        clock and local_tiles.json (fixed URLs) come first,
                        then one entry per relay name seen since edged started
                        (title from the relay's hello; greyed while it is away).
+       POST /mcp       MCP server (Streamable HTTP, stateless, JSON replies) whose
+                       tools register_tile / list_tiles / remove_tile manage
+                       URL tiles kept in mcp_tiles.json and listed by /tiles
+                       after local_tiles.json; see mcp_tiles.py and TILES.md.
        GET  /home      host-local placeholder page (clock, "nothing claimed").
        POST /front     pin the kiosk window above every other window (default).
        POST /release   unpin it, so other windows (e.g. over RDP) can come
@@ -77,6 +81,7 @@ import threading
 import time
 
 import edgerelay
+import mcp_tiles
 import updater
 
 if sys.platform == "win32":
@@ -96,6 +101,7 @@ LOG_PATH = os.path.join(DATA, "edged.log")
 LAYOUT_PATH = os.path.join(DATA, "edge_layout.json")
 SLOTS = 3  # completely fixed; see the module docstring
 LOCAL_TILES_PATH = os.path.join(DATA, "local_tiles.json")  # optional; see load_local_tiles()
+MCP_TILES_PATH = os.path.join(DATA, "mcp_tiles.json")  # tiles registered through POST /mcp (mcp_tiles.py)
 RELAUNCH_MIN_INTERVAL = 15.0  # seconds between browser launches, so a crash loop can't spawn windows
 REPIN_SECONDS = 300  # the column's unpin re-pins itself, since other windows can cover the re-pin button
 SETTLE_SECONDS = 0.4  # after a raise, how long the kiosk must stay on top before we call it raised
@@ -332,6 +338,7 @@ def load_local_tiles() -> list[dict]:
 class Handler(http.server.BaseHTTPRequestHandler):
     layout: Layout
     local_tiles: list[dict]
+    mcp: mcp_tiles.McpServer
     relay: edgerelay.RelayServer
     updater: updater.Updater
 
@@ -374,10 +381,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/relays":
             self.json(200, self.relay.status())
         elif path == "/tiles":
-            self.json(200, {"tiles": [dict(t, online=True) for t in self.local_tiles] + self.relay.tiles(),
+            self.json(200, {"tiles": [dict(t, online=True) for t in self.local_tiles + self.mcp.registry.list()]
+                            + self.relay.tiles(),
                             "slots": self.layout.get()})
         elif path == "/version":
             self.json(200, self.updater.status())
+        elif path == "/mcp":  # stateless Streamable HTTP: no server-initiated SSE stream
+            self.send_response(405)
+            self.send_header("Allow", "POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         else:
             self.json(404, {"error": "not found"})
 
@@ -398,6 +411,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         who = self.client_address[0]
+        if path == "/mcp":
+            out = self.mcp.handle(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            if out is None:
+                self.reply(202, b"", "application/json")
+            else:
+                self.json(200, out)
+            return
         try:
             if path == "/front":
                 raised = pin()
@@ -557,6 +577,7 @@ class Server(http.server.ThreadingHTTPServer):
 def main() -> int:
     Handler.layout = Layout()
     Handler.local_tiles = load_local_tiles()
+    Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log)
     Handler.relay = edgerelay.RelayServer(log)
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:
