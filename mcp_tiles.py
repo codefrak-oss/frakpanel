@@ -17,7 +17,10 @@ Protocol versions (PROTOCOL_VERSIONS), dual-era per the 2026-07-28 spec:
   client asking for anything else gets 2025-06-18), then plain JSON-RPC, a
   batch allowed; a POST with no MCP-Protocol-Version header is legacy.
 
-Tools: frakpanel_guide, register_tile {url, title}, list_tiles, remove_tile {url}.
+Tools: frakpanel_guide, register_tile {url, title}, list_tiles, remove_tile {url},
+get_layout, set_slot {slot, url}. get_layout/set_slot read and change which
+tile each of the panel's slots 0-2 shows, through edged's Layout (passed in,
+so validation and persistence are exactly POST /slot's).
 frakpanel_guide serves TILES.md and examples/self_hosted_tile.py from the
 installed version's folder (the installers and release zips ship the tree).
 Registrations live in mcp_tiles.json in $FRAKPANEL_DATA, apart from the
@@ -49,6 +52,8 @@ This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
   The url must be reachable from the panel host and allow being framed
   (no X-Frame-Options: DENY/SAMEORIGIN, no CSP frame-ancestors excluding it).
 - list_tiles / remove_tile {url}: see and remove tiles registered here.
+- get_layout: the URL shown in each panel slot 0-2 ("" is the clock).
+- set_slot {slot, url}: change what the panel shows in slot 0, 1 or 2.
 
 To add a tile backed by your own web server: either frame an existing page
 (Route A/M below), or run a small tile server that fetches the upstream API
@@ -175,11 +180,31 @@ TOOLS = [
             "required": ["url"],
         },
     },
+    {
+        "name": "get_layout",
+        "description": "Which tile URL the panel shows in each of its slots 0-2, as {\"slots\": [url, url, url]} "
+                       "(\"\" is the clock).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "set_slot",
+        "description": "Change what the panel shows: put a tile in slot 0, 1 or 2. Returns the new layout.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slot": {"type": "integer", "minimum": 0, "maximum": 2, "description": "The slot, 0-2"},
+                "url": {"type": "string", "description": "\"\" for the clock, relay://<name>/<path>, "
+                                                         "or an http(s) URL (e.g. a tile from list_tiles)"},
+            },
+            "required": ["slot", "url"],
+        },
+    },
 ]
 
 
-INSTRUCTIONS = ("Register URL tiles for the frakpanel tile picker. Call frakpanel_guide first to learn "
-                "what frakpanel is and how to build tiles. No auth; LAN only.")
+INSTRUCTIONS = ("Register URL tiles for the frakpanel tile picker, and choose which tile the panel shows in "
+                "each slot 0-2 (get_layout, set_slot: set_slot changes what the panel shows). Call "
+                "frakpanel_guide first to learn what frakpanel is and how to build tiles. No auth; LAN only.")
 
 
 def _text(obj, error: bool = False) -> dict:
@@ -188,8 +213,9 @@ def _text(obj, error: bool = False) -> dict:
 
 
 class McpServer:
-    def __init__(self, registry: TileRegistry, version: str, log=lambda msg: None):
+    def __init__(self, registry: TileRegistry, version: str, log=lambda msg: None, layout=None):
         self.registry = registry
+        self.layout = layout  # edged.Layout: get() and set_slot({slot, url}); None leaves the layout tools erroring
         self.version = version
         self.log = log
 
@@ -213,6 +239,14 @@ class McpServer:
                     self.log(f"mcp remove_tile {url!r}")
                     return _text({"removed": url})
                 return _text(f"no registered tile with url {url!r}", error=True)
+            if name in ("get_layout", "set_slot"):
+                if self.layout is None:
+                    return _text("no panel layout is available", error=True)
+                if name == "get_layout":
+                    return _text({"slots": self.layout.get()})
+                slots = self.layout.set_slot({"slot": args.get("slot"), "url": args.get("url")})
+                self.log(f"mcp set_slot {args.get('slot')} {args.get('url')!r}")
+                return _text({"slots": slots})
         except ValueError as exc:
             return _text(str(exc), error=True)
         raise KeyError(name)

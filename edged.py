@@ -38,7 +38,9 @@ Two jobs in one process:
                        through initialize) whose
                        tools register_tile / list_tiles / remove_tile manage
                        URL tiles kept in mcp_tiles.json and listed by /tiles
-                       after local_tiles.json; see mcp_tiles.py and TILES.md.
+                       after local_tiles.json, and get_layout / set_slot
+                       {slot, url} read and change the slots like GET /layout
+                       and POST /slot; see mcp_tiles.py and TILES.md.
        GET  /home      host-local placeholder page (clock, "nothing claimed").
        POST /front     pin the kiosk window above every other window (default).
        POST /release   unpin it, so other windows (e.g. over RDP) can come
@@ -580,7 +582,8 @@ class Server(http.server.ThreadingHTTPServer):
 def main() -> int:
     Handler.layout = Layout()
     Handler.local_tiles = load_local_tiles()
-    Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log)
+    Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log,
+                                         Handler.layout)
     Handler.relay = edgerelay.RelayServer(log)
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:
