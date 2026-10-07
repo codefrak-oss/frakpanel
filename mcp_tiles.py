@@ -5,7 +5,9 @@ each POST is one JSON-RPC 2.0 message (or a batch) answered with
 application/json; no sessions, no SSE stream (GET /mcp is 405). No auth, like
 the rest of edged: anything on the LAN can register a tile.
 
-Tools: register_tile {url, title}, list_tiles, remove_tile {url}.
+Tools: frakpanel_guide, register_tile {url, title}, list_tiles, remove_tile {url}.
+frakpanel_guide serves TILES.md and examples/self_hosted_tile.py from the
+installed version's folder (the installers and release zips ship the tree).
 Registrations live in mcp_tiles.json in $FRAKPANEL_DATA, apart from the
 hand-edited local_tiles.json; GET /tiles reads them live, so no restart.
 """
@@ -14,6 +16,44 @@ import os
 import threading
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+GUIDE_INTRO = """# frakpanel: orientation for an MCP client
+
+frakpanel is a wall/desk panel: a kiosk browser on a panel host (Windows or
+Linux) showing a grid of tiles, run by edged (HTTP on port 7781). A tile is a
+web page shown in an iframe on the panel; users pick tiles from the tile picker.
+
+This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
+- frakpanel_guide: this text.
+- register_tile {url, title}: add a URL tile to the picker (or retitle it).
+  The url must be reachable from the panel host and allow being framed
+  (no X-Frame-Options: DENY/SAMEORIGIN, no CSP frame-ancestors excluding it).
+- list_tiles / remove_tile {url}: see and remove tiles registered here.
+
+To add a tile backed by your own web server: either frame an existing page
+(Route A/M below), or run a small tile server that fetches the upstream API
+server-side and serves a frameable page (Route B; the runnable example
+examples/self_hosted_tile.py is inlined at the end), then call register_tile
+with its URL. The tile developer guide (TILES.md) follows.
+
+"""
+
+
+def _read(rel: str) -> str:
+    with open(os.path.join(HERE, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+def guide() -> str:
+    """The orientation text; OSError if TILES.md cannot be read."""
+    text = GUIDE_INTRO + _read("TILES.md")
+    try:
+        example = _read(os.path.join("examples", "self_hosted_tile.py"))
+    except OSError as exc:
+        return text + f"\n\n(examples/self_hosted_tile.py could not be read: {exc})\n"
+    return (text + "\n\n---\n\n# examples/self_hosted_tile.py (runnable example, save and run with python3)\n\n"
+            "```python\n" + example + "```\n")
 
 
 class TileRegistry:
@@ -82,6 +122,14 @@ class TileRegistry:
 
 TOOLS = [
     {
+        "name": "frakpanel_guide",
+        "description": "Call this first: explains what frakpanel is, what a tile is, how to build a tile "
+                       "(framing a page, or a small self-hosted tile server; X-Frame-Options/CSP pitfalls) "
+                       "and how to register it with register_tile. Returns the tile developer guide and "
+                       "the runnable example examples/self_hosted_tile.py.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "register_tile",
         "description": "Add a URL tile to the frakpanel tile picker (or retitle it if the url is already registered). "
                        "The page must be reachable from the panel host and allow being framed.",
@@ -124,6 +172,11 @@ class McpServer:
 
     def call_tool(self, name: str, args: dict) -> dict:
         try:
+            if name == "frakpanel_guide":
+                try:
+                    return _text(guide())
+                except OSError as exc:
+                    return _text(f"the guide could not be read: {exc}", error=True)
             if name == "register_tile":
                 tile = self.registry.register(args.get("url"), args.get("title"))
                 self.log(f"mcp register_tile {tile}")
@@ -159,7 +212,8 @@ class McpServer:
                 "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "frakpanel", "version": self.version},
-                "instructions": "Register URL tiles for the frakpanel tile picker. No auth; LAN only.",
+                "instructions": "Register URL tiles for the frakpanel tile picker. Call frakpanel_guide first to learn "
+                                "what frakpanel is and how to build tiles. No auth; LAN only.",
             })
         if method == "ping":
             return _result(mid, {})
