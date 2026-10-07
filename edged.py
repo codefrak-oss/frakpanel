@@ -583,7 +583,7 @@ def main() -> int:
     Handler.layout = Layout()
     Handler.local_tiles = load_local_tiles()
     Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log,
-                                         Handler.layout)
+                                         Handler.layout, kiosk_platform.screenshot)
     Handler.relay = edgerelay.RelayServer(log)
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:

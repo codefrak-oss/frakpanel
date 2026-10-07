@@ -22,7 +22,7 @@ if [[ "${1:-}" == "--system" ]]; then
   if command -v apt-get >/dev/null; then
     sudo apt-get install -y python3 xdotool wmctrl x11-utils x11-xserver-utils imagemagick
   else
-    echo "not apt: install python3, xdotool, wmctrl, xprop, xrandr and (for edge-shot.sh) ImageMagick yourself" >&2
+    echo "not apt: install python3, xdotool, wmctrl, xprop, xrandr and (for edge-shot.sh and the MCP screenshot tool) ImageMagick yourself" >&2
   fi
   command -v google-chrome >/dev/null || command -v chromium >/dev/null || command -v chromium-browser >/dev/null \
     || echo "no Chrome or Chromium yet: edged needs one (kiosk_linux.py BROWSERS)" >&2
