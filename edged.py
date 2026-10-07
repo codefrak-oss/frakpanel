@@ -33,7 +33,9 @@ Two jobs in one process:
                        clock and local_tiles.json (fixed URLs) come first,
                        then one entry per relay name seen since edged started
                        (title from the relay's hello; greyed while it is away).
-       POST /mcp       MCP server (Streamable HTTP, stateless, JSON replies) whose
+       POST /mcp       MCP server (Streamable HTTP, stateless, JSON replies;
+                       protocol 2026-07-28, and 2025-06-18 / 2025-03-26
+                       through initialize) whose
                        tools register_tile / list_tiles / remove_tile manage
                        URL tiles kept in mcp_tiles.json and listed by /tiles
                        after local_tiles.json; see mcp_tiles.py and TILES.md.
@@ -398,7 +400,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name")
         self.end_headers()
 
     def body(self) -> dict:
@@ -412,11 +414,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         who = self.client_address[0]
         if path == "/mcp":
-            out = self.mcp.handle(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            status, out = self.mcp.respond(self.rfile.read(int(self.headers.get("Content-Length") or 0)),
+                                           self.headers)
             if out is None:
-                self.reply(202, b"", "application/json")
+                self.reply(status, b"", "application/json")
             else:
-                self.json(200, out)
+                self.json(status, out)
             return
         try:
             if path == "/front":
