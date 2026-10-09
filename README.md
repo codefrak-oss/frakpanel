@@ -131,7 +131,12 @@ extra hop.
 name seen since `edged` started (greyed while away). Tiles announce
 themselves through their relay title; nothing is registered by hand. To add
 fixed entries, copy `local_tiles.example.json` to `local_tiles.json` beside
-`edged.py` and restart it.
+`edged.py` and restart it. Swipe right on a card to reveal `delete`, then
+confirm yes or no: that works on tiles registered over MCP (removed from
+`mcp_tiles.json`) and on away relay entries (forgotten until that laptop
+reconnects). The clock, `local_tiles.json` entries and connected relays
+cannot be deleted; edit the file to drop a fixed entry. A slot showing a
+deleted tile keeps it until you pick another.
 
 **Staying on top.** On Windows, touching the panel pops the taskbar up over
 the kiosk, and pop-ups can cover it. `edged` keeps the kiosk pinned topmost

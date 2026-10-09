@@ -292,6 +292,13 @@ data folder (beside `edge_layout.json`), so they survive restarts; MCP only
 manages that file, never `local_tiles.json`. The framing caveats of Route A
 apply.
 
+To delete a registered tile from the panel itself, swipe right on its card in
+the picker, tap `delete`, and confirm `yes` (or `no` to keep it): the shell
+sends `POST /tiles/delete {"url":...}`, which removes it from `mcp_tiles.json`
+like `remove_tile`. The same swipe forgets a relay entry while its laptop is
+away (it reappears on reconnect). The clock, `local_tiles.json` entries and
+connected relays show no delete. A slot showing the tile keeps its URL.
+
 ### Route B: a small tile that fetches the API server-side
 
 When the service only exposes a JSON/HTTP API (no presentable page), or its

@@ -330,7 +330,7 @@ class EdgedHttpTest(unittest.TestCase):
         status, data = req("POST", "/mcp", body, dict(modern, **{"Mcp-Method": "tools/call"}))
         self.assertEqual((status, json.loads(data)["error"]["code"]), (400, -32020))
         tiles = json.loads(req("GET", "/tiles")[1])["tiles"]
-        self.assertIn(dict(TILE, online=True), tiles)
+        self.assertIn(dict(TILE, online=True, deletable=True), tiles)
 
 
 if __name__ == "__main__":
