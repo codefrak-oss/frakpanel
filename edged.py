@@ -441,6 +441,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     relay: edgerelay.RelayServer
     updater: updater.Updater
 
+    @classmethod
+    def picker_tiles(cls) -> list[dict]:
+        """What the column's tile picker offers, in order: the clock and
+        local_tiles.json, MCP-registered tiles, relay tiles; GET /tiles and MCP list_tiles."""
+        return ([dict(t, online=True, deletable=False) for t in cls.local_tiles]
+                + [dict(t, online=True, deletable=True) for t in cls.mcp.registry.list()]
+                + [dict(t, deletable=not t["online"]) for t in cls.relay.tiles()])
+
     def log_message(self, fmt, *args) -> None:  # quiet: the shell polls every 2s
         pass
 
@@ -483,7 +491,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/relays":
             self.json(200, self.relay.status())
         elif path == "/tiles":
-            self.json(200, {"tiles": picker_tiles(), "slots": self.layout.get()})
+            self.json(200, {"tiles": self.picker_tiles(), "slots": self.layout.get()})
         elif path == "/version":
             self.json(200, self.updater.status())
         elif path == "/mcp":  # stateless Streamable HTTP: no server-initiated SSE stream
@@ -739,19 +747,11 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
-def picker_tiles() -> list[dict]:
-    """What the column's tile picker offers, in order: the clock and
-    local_tiles.json, MCP-registered tiles, relay tiles; GET /tiles and MCP list_tiles."""
-    return ([dict(t, online=True, deletable=False) for t in Handler.local_tiles]
-            + [dict(t, online=True, deletable=True) for t in Handler.mcp.registry.list()]
-            + [dict(t, deletable=not t["online"]) for t in Handler.relay.tiles()])
-
-
 def main() -> int:
     Handler.layout = Layout()
     Handler.local_tiles = load_local_tiles()
     Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log,
-                                         Handler.layout, kiosk_platform.screenshot, picker_tiles)
+                                         Handler.layout, kiosk_platform.screenshot, Handler.picker_tiles)
     Handler.relay = edgerelay.RelayServer(log)
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:
