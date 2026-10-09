@@ -46,9 +46,10 @@ Two jobs in one process:
        POST /mcp       MCP server (Streamable HTTP, stateless, JSON replies;
                        protocol 2026-07-28, and 2025-06-18 / 2025-03-26
                        through initialize) whose
-                       tools register_tile / list_tiles / remove_tile manage
-                       URL tiles kept in mcp_tiles.json and listed by /tiles
-                       after local_tiles.json, and get_layout / set_slot
+                       tools register_tile / remove_tile manage URL tiles
+                       kept in mcp_tiles.json and listed by /tiles after
+                       local_tiles.json, list_tiles returns every tile the
+                       picker offers (the /tiles list, clock included), and get_layout / set_slot
                        {slot, url} read and change the slots like GET /layout
                        and POST /slot; see mcp_tiles.py and TILES.md.
        GET  /home      host-local placeholder page (clock, "nothing claimed").
@@ -440,6 +441,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     relay: edgerelay.RelayServer
     updater: updater.Updater
 
+    @classmethod
+    def picker_tiles(cls) -> list[dict]:
+        """What the column's tile picker offers, in order: the clock and
+        local_tiles.json, MCP-registered tiles, relay tiles; GET /tiles and MCP list_tiles."""
+        return ([dict(t, online=True, deletable=False) for t in cls.local_tiles]
+                + [dict(t, online=True, deletable=True) for t in cls.mcp.registry.list()]
+                + [dict(t, deletable=not t["online"]) for t in cls.relay.tiles()])
+
     def log_message(self, fmt, *args) -> None:  # quiet: the shell polls every 2s
         pass
 
@@ -482,10 +491,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/relays":
             self.json(200, self.relay.status())
         elif path == "/tiles":
-            self.json(200, {"tiles": [dict(t, online=True, deletable=False) for t in self.local_tiles]
-                            + [dict(t, online=True, deletable=True) for t in self.mcp.registry.list()]
-                            + [dict(t, deletable=not t["online"]) for t in self.relay.tiles()],
-                            "slots": self.layout.get()})
+            self.json(200, {"tiles": self.picker_tiles(), "slots": self.layout.get()})
         elif path == "/version":
             self.json(200, self.updater.status())
         elif path == "/mcp":  # stateless Streamable HTTP: no server-initiated SSE stream
@@ -745,7 +751,7 @@ def main() -> int:
     Handler.layout = Layout()
     Handler.local_tiles = load_local_tiles()
     Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log,
-                                         Handler.layout, kiosk_platform.screenshot)
+                                         Handler.layout, kiosk_platform.screenshot, Handler.picker_tiles)
     Handler.relay = edgerelay.RelayServer(log)
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:

@@ -266,7 +266,7 @@ Tools:
 |---|---|---|
 | `register_tile` | `url`, `title` | adds the tile (or retitles it if the `url` is already registered). `url` must start with `http://` or `https://` and `title` must not be empty, else the call returns a tool error and nothing is registered. |
 | `frakpanel_guide` | none | returns an intro to frakpanel and its MCP tools, this guide (read from the installed version) and the source of `examples/self_hosted_tile.py`; an MCP client on another machine should call it first |
-| `list_tiles` | none | the tiles registered through MCP |
+| `list_tiles` | none | every tile the picker offers, as `GET /tiles` lists them: the clock (`url` `""`), `local_tiles.json` entries, MCP-registered tiles, relay tiles; each with `url`, `title`, `online`, `deletable` |
 | `remove_tile` | `url` | removes that registered tile |
 | `get_layout` | none | `{"slots": [url, url, url]}`: what the panel shows in slots 0-2 (`""` is the clock), as `GET /tiles` reports them |
 | `set_slot` | `slot` (0-2), `url` | changes what the panel shows: puts `url` (`""` for the clock, `relay://<name>/<path>` or an http(s) URL) in that slot, exactly like `POST /slot`, and returns the new `{"slots": [...]}`. A bad slot or url returns a tool error and leaves the layout unchanged. |

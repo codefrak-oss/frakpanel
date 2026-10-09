@@ -54,7 +54,11 @@ This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
 - register_tile {url, title}: add a URL tile to the picker (or retitle it).
   The url must be reachable from the panel host and allow being framed
   (no X-Frame-Options: DENY/SAMEORIGIN, no CSP frame-ancestors excluding it).
-- list_tiles / remove_tile {url}: see and remove tiles registered here.
+- list_tiles: every tile the panel's picker offers, in picker order: the
+  clock (url ""), local_tiles.json entries, tiles registered here, relay
+  tiles; each with url, title, online and deletable.
+- remove_tile {url}: remove a tile registered here (the deletable ones that
+  are not relay tiles).
 - get_layout: the URL shown in each panel slot 0-2 ("" is the clock).
 - set_slot {slot, url}: change what the panel shows in slot 0, 1 or 2.
 - screenshot: a PNG image of what the panel host's screen shows right now.
@@ -64,11 +68,10 @@ This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
 The panel has three slots, 0 to 2, left to right; the url "" always means
 the built-in clock, not a registered tile.
 
-list_tiles only returns the URL tiles registered through this MCP server.
-The full set the panel's picker offers also includes local_tiles.json
-entries and relay tiles from connected laptops; to see all of it, fetch
-GET http://<panel-host>:7781/tiles (plain HTTP, no auth). That response also
-carries the current slots, so it doubles as a layout check.
+list_tiles returns every tile the panel's picker offers, the same list as
+GET http://<panel-host>:7781/tiles: the clock (url ""), local_tiles.json
+entries, the tiles registered through this MCP server, then relay tiles from
+connected laptops, each with url, title, online and deletable.
 
 Call get_layout first to see what each slot currently shows, then change one
 slot at a time with set_slot {slot, url}. url is one of: "" for the clock,
@@ -196,7 +199,7 @@ TOOLS = [
     },
     {
         "name": "list_tiles",
-        "description": "List the URL tiles registered through this MCP server.",
+        "description": "List every tile the panel's picker offers, in picker order: the clock (url \"\"), local_tiles.json entries, tiles registered through this MCP server, relay tiles; each with url, title, online and deletable.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -248,8 +251,10 @@ def _text(obj, error: bool = False) -> dict:
 
 
 class McpServer:
-    def __init__(self, registry: TileRegistry, version: str, log=lambda msg: None, layout=None, capture=None):
+    def __init__(self, registry: TileRegistry, version: str, log=lambda msg: None, layout=None, capture=None,
+                 tiles=None):
         self.registry = registry
+        self.tiles = tiles  # () -> the picker's tile list (GET /tiles); None lists only the registry's tiles
         self.capture = capture  # () -> PNG bytes, raising OSError on failure; None leaves screenshot erroring
         self.layout = layout  # edged.Layout: get() and set_slot({slot, url}); None leaves the layout tools erroring
         self.version = version
@@ -267,7 +272,7 @@ class McpServer:
                 self.log(f"mcp register_tile {tile}")
                 return _text({"registered": tile})
             if name == "list_tiles":
-                return _text({"tiles": self.registry.list()})
+                return _text({"tiles": self.tiles() if self.tiles else self.registry.list()})
             if name == "remove_tile":
                 url = args.get("url")
                 removed = self.registry.remove(url)
