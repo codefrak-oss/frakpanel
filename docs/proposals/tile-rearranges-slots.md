@@ -1,6 +1,7 @@
 # A tile allowed to rearrange the panel's slots
-Status: proposed
+Status: accepted
 Decision log:
+- 2026-10-09 accepted (#23) — option b (Gated POST /slot from browser) chosen
 Ticket: #23
 
 ## The question
