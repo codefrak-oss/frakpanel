@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A tile allowed to rearrange the panel's slots</title>
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--line:#ccc;--acc:#2a6df4;--card:#f5f5f7}
+@media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#eee;--mut:#aaa;--line:#444;--acc:#7aa7ff;--card:#1f1f1f}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5}
+main{max-width:860px;margin:0 auto;padding:16px}
+svg{width:100%;height:auto}
+.opt{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:10px 0}
+.rec{border-color:var(--acc)}
+.wrap{overflow-x:auto}table{border-collapse:collapse;min-width:620px}td,th{border:1px solid var(--line);padding:6px;text-align:left;vertical-align:top}
+small{color:var(--mut)}
+</style></head><body><main>
+<h1>A tile allowed to rearrange the panel's slots</h1>
+<p><small>Status: proposed · Ticket #23</small></p>
+<h2>The question</h2>
+<p>Should a registered tile (say, in the middle slot) be able to put its own "left" and "right" pages into slots 0 and 2 on a tap, within about a second, only if its registrant allowed it, even when its server cannot reach edged?</p>
+<h2>Today, without any change</h2>
+<p><code>edged.py:358</code> sends <code>Access-Control-Allow-Origin: *</code> on every reply and <code>do_OPTIONS</code> (<code>edged.py:401-405</code>) allows POST, so any tile page in the kiosk browser can already <code>POST /slot</code>, with no permission. The shell polls <code>/layout</code> every 2 s.</p>
+<h2>Proposal: B, gate the browser path by Origin</h2>
+<svg viewBox="0 0 720 230" role="img" aria-label="Tile page in kiosk browser posts to edged, which checks Origin against the arrange flag and updates the layout">
+<g fill="none" stroke="currentColor" stroke-width="1.5">
+<rect x="10" y="20" width="200" height="80" rx="6"/><rect x="260" y="20" width="200" height="80" rx="6"/><rect x="510" y="20" width="200" height="80" rx="6"/>
+<rect x="260" y="140" width="200" height="70" rx="6"/><rect x="10" y="140" width="200" height="70" rx="6"/>
+<path d="M210 60H255M460 60H505M360 100V135M210 175H255"/>
+</g>
+<g fill="var(--acc)"><path d="M255 55l8 5-8 5zM505 55l8 5-8 5zM355 135l5 8 5-8zM255 170l8 5-8 5z"/></g>
+<g fill="currentColor" font-size="13" text-anchor="middle">
+<text x="110" y="50">tile page (iframe)</text><text x="110" y="70">in kiosk browser</text><text x="110" y="88">tap → POST /slot</text>
+<text x="360" y="50">edged</text><text x="360" y="70">Origin → which tile?</text><text x="360" y="88">arrange + in a slot? else 403</text>
+<text x="610" y="50">Layout.set_slot</text><text x="610" y="70">edge_layout.json</text>
+<text x="360" y="170">shell long-polls /layout</text><text x="360" y="190">screen changes &lt;1 s</text>
+<text x="110" y="170">arrange flag from</text><text x="110" y="190">--may-arrange / json / MCP</text>
+</g></svg>
+<h2>Options</h2>
+<div class="opt" data-option-id="a"><h3>A. Tile server contract, long-polled by edged</h3>
+<p>The tile server exposes a layout-requests endpoint edged long-polls (through the relay for laptops). Can't reach URL tiles without a cooperating server; still needs B's gate.</p>
+<button disabled data-choose="a">Choose this one</button></div>
+<div class="opt rec" data-option-id="b"><h3>B. Page calls POST /slot, gated by the permission (recommended)</h3>
+<p>Keep today's browser path; edged maps the request's Origin to a registered tile and allows it only with <code>arrange</code> and while it sits in a slot. Works for all three routes; the server never needs a route to edged.</p>
+<button disabled data-choose="b">Choose this one</button></div>
+<div class="opt" data-option-id="c"><h3>C. Layout op on the relay control connection</h3>
+<p>New <code>layout</code> and <code>tiles</code> ops on <code>edgerelay.py</code>'s outbound control link. Relay tiles only; still needs B's gate.</p>
+<button disabled data-choose="c">Choose this one</button></div>
+<div class="opt" data-option-id="d"><h3>D. Build nothing yet</h3>
+<p>Any tile page keeps setting slots with no permission.</p>
+<button disabled data-choose="d">Choose this one</button></div>
+<h2>Comparison</h2>
+<div class="wrap"><table>
+<tr><th></th><th>permission enforceable</th><th>all 3 routes</th><th>server can't reach edged</th><th>new protocol</th><th>latency</th><th>why not</th></tr>
+<tr><td>A</td><td>only with B's gate</td><td>relay; URL tiles only with contract</td><td>yes (relay streams)</td><td>2 endpoints + poller</td><td>≤2 s (&lt;1 s tightened)</td><td>more plumbing, still needs B</td></tr>
+<tr><td><b>B</b></td><td>yes, browser calls</td><td>yes</td><td>yes</td><td>one header check</td><td>≤2 s (&lt;1 s tightened)</td><td>—</td></tr>
+<tr><td>C</td><td>only with B's gate</td><td>relay only</td><td>yes</td><td>2 ops + local endpoint</td><td>≤2 s (&lt;1 s tightened)</td><td>relay-only, still needs B</td></tr>
+<tr><td>D</td><td>no</td><td>n/a</td><td>n/a</td><td>none</td><td>n/a</td><td>unguarded /slot stays</td></tr>
+</table></div>
+<h2>Principles</h2>
+<p>"No auth anywhere" stays true: the flag is a guard against a misbehaving tile, not auth (curl can still set slots); TILES.md gains one line. "The host never knows what a button means" is kept: edged only hears "URL X in slot N".</p>
+<h2>Open questions</h2>
+<ul><li>Registrant-only permission, or also revocable from the picker? Assumed registration only.</li>
+<li>Must the requesting tile be in a slot? Assumed yes.</li>
+<li>May a permitted tile use POST /layout as well as /slot? Assumed both.</li></ul>
+<h2>Implementation outline</h2>
+<ol><li><code>mcp_tiles.py</code>: <code>register_tile</code> takes <code>arrange</code>, stored in mcp_tiles.json.</li>
+<li><code>edged.py</code>: local_tiles.json <code>arrange</code>; <code>GET /tiles</code> reports it.</li>
+<li><code>edgerelay.py</code>: <code>--may-arrange</code> in hello, persisted in edge_relays.json.</li>
+<li><code>edged.py</code>: Origin gate on /slot and /layout, 403 otherwise.</li>
+<li><code>edged.py</code>: shell long-polls <code>/layout?since=</code>.</li>
+<li><code>examples/demo_tile.py</code>: left/right demo.</li>
+<li>TILES.md and README docs.</li>
+<li>Tests for gate, persistence, MCP field, /tiles field.</li></ol>
+<h2>Cost</h2>
+<p>One feature ticket, tier 5, about 5 points: one or two Smith runs. A or C would each add a run.</p>
+</main></body></html>
