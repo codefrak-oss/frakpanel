@@ -104,6 +104,9 @@ tile session shouldn't need to touch it.
 - Dark background (the panel sits beside black slots and the column
   `#0d0f14`). `demo_tile.py` is a complete working example of all of
   the above (a page, SSE, and a timed tap round trip).
+- **Don't draw your own clock.** The control column already shows the time
+  beside the slots, so a tile putting one in its upper right (or anywhere)
+  is redundant. Spend that space on the tile's own state instead.
 
 **Run it**
 ```
