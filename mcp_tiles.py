@@ -59,6 +59,30 @@ This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
 - set_slot {slot, url}: change what the panel shows in slot 0, 1 or 2.
 - screenshot: a PNG image of what the panel host's screen shows right now.
 
+## Fetching tiles and placing them in the three slots
+
+The panel has three slots, 0 to 2, left to right; the url "" always means
+the built-in clock, not a registered tile.
+
+list_tiles only returns the URL tiles registered through this MCP server.
+The full set the panel's picker offers also includes local_tiles.json
+entries and relay tiles from connected laptops; to see all of it, fetch
+GET http://<panel-host>:7781/tiles (plain HTTP, no auth). That response also
+carries the current slots, so it doubles as a layout check.
+
+Call get_layout first to see what each slot currently shows, then change one
+slot at a time with set_slot {slot, url}. url is one of: "" for the clock,
+relay://<name>/<path> for a relay tile, or an http(s):// URL the panel host
+can reach.
+
+Worked example: the user says "show the AI accounts tile in the middle
+slot". The client fetches the tile list (list_tiles or GET /tiles), finds
+the tile whose title matches "AI accounts", calls get_layout to see the
+current slots, then calls set_slot {"slot": 1, "url": <that tile's url>}.
+
+There is no auth and the last write wins, so before replacing a slot that
+is not showing the clock, a client should confirm with the user first.
+
 To add a tile backed by your own web server: either frame an existing page
 (Route A/M below), or run a small tile server that fetches the upstream API
 server-side and serves a frameable page (Route B; the runnable example

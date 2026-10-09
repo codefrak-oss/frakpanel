@@ -74,6 +74,9 @@ class McpTest(unittest.TestCase):
         self.assertIn("examples/self_hosted_tile.py", text)
         self.assertIn("def ", text.split("# examples/self_hosted_tile.py")[1])
         self.assertIn("X-Frame-Options", text)
+        self.assertIn("Fetching tiles and placing them in the three slots", text)
+        self.assertIn("set_slot", text)
+        self.assertIn("/tiles", text)
 
     def test_guide_missing(self):
         old = mcp_tiles.HERE
