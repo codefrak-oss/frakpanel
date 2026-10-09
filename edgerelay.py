@@ -150,6 +150,17 @@ class RelayServer:
                 key=lambda e: (not e["online"], e["title"].lower()),
             )
 
+    def forget(self, name: str) -> bool | None:
+        """Drops an away name from the picker (it comes back when that laptop reconnects).
+        None: never seen; False: connected now, so not forgotten."""
+        with self.lock:
+            if name not in self.titles:
+                return None
+            if name in self.clients:
+                return False
+            del self.titles[name]
+            return True
+
     # -- ports --
     def port_for(self, name: str) -> int:
         with self.lock:

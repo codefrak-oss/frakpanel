@@ -33,6 +33,13 @@ Two jobs in one process:
                        clock and local_tiles.json (fixed URLs) come first,
                        then one entry per relay name seen since edged started
                        (title from the relay's hello; greyed while it is away).
+                       "deletable" says whether POST /tiles/delete takes it.
+       POST /tiles/delete  {"url":...} what the picker's swipe-right + "yes"
+                       sends: removes a tile registered over MCP from
+                       mcp_tiles.json, or forgets an away relay name until
+                       that laptop reconnects. 404 for an unknown url, 409
+                       for the clock, local_tiles.json entries and a
+                       connected relay. Slots showing it keep their URL.
        POST /mcp       MCP server (Streamable HTTP, stateless, JSON replies;
                        protocol 2026-07-28, and 2025-06-18 / 2025-03-26
                        through initialize) whose
@@ -147,6 +154,15 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 #pick .card small{font-size:14px;color:#8a8f98;display:block;white-space:normal;overflow-wrap:break-word}
 #pick .card.on{border-color:#6fcf97}
 #pick .card.off b{color:#5c6270}
+#pick .card{position:relative;transition:transform .15s}
+#pick .card.swiped{transform:translateX(14px);background:#2a3140}
+#pick .card .del{display:none;position:absolute;right:8px;top:8px;bottom:8px;width:96px;border-radius:12px;background:#c0392b;color:#fff;font-size:18px;align-items:center;justify-content:center}
+#pick .card.swiped .del{display:flex}
+#confirm{position:absolute;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center}
+#confirm[hidden]{display:none}
+#confirm div{background:#171b24;border:2px solid #22262f;border-radius:14px;padding:24px 30px;color:#e6e6e6;font-size:22px;text-align:center}
+#confirm span{display:inline-block;margin:18px 12px 0;padding:14px 34px;border-radius:12px;background:#2a3140}
+#confirm #yes{background:#c0392b}
 #tiles.open{background:#2a3140;color:#e6e6e6}
 .time{font-size:26px;color:#e6e6e6;font-weight:300;font-variant-numeric:tabular-nums}
 .btn{width:100px;height:72px;border-radius:12px;background:#171b24;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:13px;color:#aab0bb;touch-action:manipulation}
@@ -161,6 +177,7 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 <div id="wrap">
   <div id="row"></div>
   <div id="pick" hidden></div>
+  <div id="confirm" hidden><div><p id="confirmq"></p><span id="yes">yes</span><span id="no">no</span></div></div>
   <div id="col">
     <div class="time" id="t"></div>
     <div style="font-size:13px" id="laptops"><span class="dot"></span><span>0 laptops</span></div>
@@ -235,11 +252,56 @@ async function fillPicker(){
       const b = document.createElement('b'); b.textContent = t.title;
       const s = document.createElement('small'); s.textContent = t.laptop ? 'webserver registers itself to frakpanel web server \u00b7 ' + t.laptop + (t.online ? '' : ' \u00b7 away') : 'frakpanel connects to web server';
       c.append(b, s);
-      c.addEventListener('click', () => { hit(c); showPicker(false); post('/slot', {slot: i, url: t.url}); });  // click, not pointerdown: a scroll drag must not pick
+      if (t.deletable && t.url) swipeToDelete(c, t);  // never the clock (url ""), whatever /tiles says
+      c.addEventListener('click', e => {  // click, not pointerdown: a scroll drag must not pick
+        if (e.target.classList.contains('del')) return;
+        if (c.dataset.swiped) {  // the click right after a swipe is ignored; a later tap restores the card
+          if (c.dataset.swiped === '2') unswipe(c); else c.dataset.swiped = '2';
+          return;
+        }
+        hit(c); showPicker(false); post('/slot', {slot: i, url: t.url});
+      });
       return c;
     }));
     return col;
   }));
+}
+// Swipe right on a deletable card (MCP-registered, or an away relay) to reveal its delete
+// button. The column keeps touch-action:pan-y, so a vertical drag is the browser's scroll
+// (we get pointercancel); only a mostly-horizontal drag of SWIPE_PX or more counts.
+const SWIPE_PX = 60;
+function swipeToDelete(c, t){
+  let x0 = null, y0 = 0;
+  const del = document.createElement('div');
+  del.className = 'del'; del.textContent = 'delete';
+  del.addEventListener('click', () => confirmDelete(c, t));
+  c.append(del);
+  c.addEventListener('pointerdown', e => { x0 = e.clientX; y0 = e.clientY; });
+  c.addEventListener('pointercancel', () => { x0 = null; });
+  c.addEventListener('pointerup', e => {
+    if (x0 === null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    x0 = null;
+    if (dx >= SWIPE_PX && Math.abs(dx) > 2 * Math.abs(dy)) {
+      c.classList.add('swiped');
+      c.dataset.swiped = '1';  // the click that follows this pointerup must not pick
+    } else if (c.dataset.swiped && dx <= -SWIPE_PX) {
+      unswipe(c);
+    }
+  });
+}
+function unswipe(c){ c.classList.remove('swiped'); setTimeout(() => delete c.dataset.swiped, 0); }
+function confirmDelete(c, t){
+  $('confirmq').textContent = 'Delete ' + t.title + '?';
+  $('confirm').hidden = false;
+  $('no').onclick = () => { $('confirm').hidden = true; unswipe(c); };
+  $('yes').onclick = async () => {
+    $('confirm').hidden = true;
+    try {
+      await fetch('/tiles/delete', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url: t.url})});
+    } catch (e) {}
+    fillPicker();  // the card leaves all three columns; slots showing it keep their URL
+  };
 }
 $('tiles').addEventListener('pointerdown', () => { hit($('tiles')); showPicker($('pick').hidden); });
 if (new URLSearchParams(location.search).get('picker')) showPicker(true);  // for screenshots
@@ -385,8 +447,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/relays":
             self.json(200, self.relay.status())
         elif path == "/tiles":
-            self.json(200, {"tiles": [dict(t, online=True) for t in self.local_tiles + self.mcp.registry.list()]
-                            + self.relay.tiles(),
+            self.json(200, {"tiles": [dict(t, online=True, deletable=False) for t in self.local_tiles]
+                            + [dict(t, online=True, deletable=True) for t in self.mcp.registry.list()]
+                            + [dict(t, deletable=not t["online"]) for t in self.relay.tiles()],
                             "slots": self.layout.get()})
         elif path == "/version":
             self.json(200, self.updater.status())
@@ -440,6 +503,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 slots = self.layout.set(body) if path == "/layout" else self.layout.set_slot(body)
                 log(f"{path[1:]} from {who}: {[u or '/home' for u in slots]}")
                 self.json(200, {"slots": slots})
+            elif path == "/tiles/delete":
+                url = self.body().get("url")
+                if not isinstance(url, str):
+                    raise ValueError("url must be a string")
+                if any(t["url"] == url for t in self.local_tiles):
+                    self.json(409, {"error": "fixed tile (clock or local_tiles.json)"})
+                elif self.mcp.registry.remove(url):
+                    log(f"tile deleted from {who}: {url}")
+                    self.json(200, {"deleted": url})
+                elif url.startswith("relay://"):
+                    gone = self.relay.forget(url[len("relay://"):].partition("/")[0])
+                    if gone is None:
+                        self.json(404, {"error": "unknown tile"})
+                    elif not gone:
+                        self.json(409, {"error": "relay is connected"})
+                    else:
+                        log(f"relay forgotten from {who}: {url}")
+                        self.json(200, {"deleted": url})
+                else:
+                    self.json(404, {"error": "unknown tile"})
             else:
                 self.json(404, {"error": "not found"})
         except (ValueError, TypeError) as exc:
