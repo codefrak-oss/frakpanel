@@ -62,6 +62,23 @@ class McpTest(unittest.TestCase):
         self.assertEqual(self.call("list_tiles")[1], {"tiles": []})
         self.assertTrue(self.call("remove_tile", url=TILE["url"])[0]["isError"])
 
+    def test_list_tiles_returns_the_picker_list(self):
+        registry = mcp_tiles.TileRegistry(self.path)
+        registry.register(TILE["url"], TILE["title"])
+        relay = {"url": "relay://lap/x", "title": "Relay", "online": False, "laptop": "lap"}
+
+        def picker():
+            return ([{"url": "", "title": "clock", "online": True, "deletable": False},
+                     {"url": "http://kvm.lan/", "title": "KVM", "online": True, "deletable": False}]
+                    + [dict(t, online=True, deletable=True) for t in registry.list()]
+                    + [dict(relay, deletable=True)])
+        server = mcp_tiles.McpServer(registry, "test", tiles=picker)
+        tiles = self.call("list_tiles", server=server)[1]["tiles"]
+        self.assertEqual([t["url"] for t in tiles], ["", "http://kvm.lan/", TILE["url"], "relay://lap/x"])
+        self.assertEqual([(t["online"], t["deletable"]) for t in tiles],
+                         [(True, False), (True, False), (True, True), (False, True)])
+        self.assertEqual(tiles[0]["title"], "clock")
+
     def test_guide(self):
         tool = next(t for t in self.rpc("tools/list")["result"]["tools"] if t["name"] == "frakpanel_guide")
         self.assertIn("first", tool["description"])
