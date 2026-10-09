@@ -144,6 +144,16 @@ and re-checks four times a second. `POST /release` (the column's `unpin`)
 lets other windows come forward, and re-pins itself after 5 minutes, because
 once unpinned another window can cover the very button that would re-pin.
 
+**Showing the desktop.** The column's `desktop` button (`POST /kiosk/stop`)
+closes the kiosk browser outright, so the panel shows the plain desktop, and
+`edged` holds off relaunching it. The shell page and its column close with the
+browser, so the panel cannot bring itself back: the confirmation asks when the
+kiosk should return (15 minutes, 1 hour, or until you bring it back; the API
+takes `{"seconds": N}`). To end it early, or after "until I bring it back",
+`curl -X POST http://<panel-host>:7781/kiosk/start` from another machine, or
+restart `edged`. `GET /layout` reports `"kiosk": "running" | "stopped"` and
+`"restart_in"`.
+
 ### Fixed slots
 
 The panel is always three equal slots beside the column. One source per slot,

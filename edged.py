@@ -13,13 +13,16 @@ Two jobs in one process:
                        each, 812x720 on the panel) plus a 120px control
                        column at the right edge that belongs to the shell (no
                        slot can cover it): clock, connected laptop count,
-                       reload, tile picker, unpin with a timed re-pin. Polls
+                       reload, tile picker, unpin with a timed re-pin, desktop
+                       (close the kiosk, with a timed return). Polls
                        /layout and rebuilds slots when they change.
                        Slots are completely fixed: every page is built for
                        exactly one slot and nothing spans (README, "Fixed
                        slots").
        GET  /layout    {"slots":["<url>", "<url>", "<url>"], "shell":"<hash>",
-                        "pinned":bool, "repin_in":seconds|null, "laptops":n}
+                        "pinned":bool, "repin_in":seconds|null, "laptops":n,
+                        "kiosk":"running"|"stopped", "restart_in":seconds|null}
+                       (restart_in is null while running or stopped untimed).
        POST /layout    {"slots":["http://host:port/x", "", "relay://air/"]}
                        sets all slots; fewer than 3 are padded with "".
                        url "" -> /home (the clock);
@@ -53,6 +56,13 @@ Two jobs in one process:
        POST /release   unpin it, so other windows (e.g. over RDP) can come
                        forward. Lasts until /front or an edged restart, or
                        for {"seconds":N} if given (the column sends 300).
+       POST /kiosk/stop  close the kiosk browser so the panel shows the plain
+                       desktop; it is not relaunched until /kiosk/start, an
+                       edged restart, or {"seconds":N} (0 < N <= 86400) if
+                       given. Replies {"stopped":true, "restart_in":N|null}.
+       POST /kiosk/start  end a stop: the supervisor relaunches the browser on
+                       its next tick, pinned as after a normal launch.
+                       Replies {"started":true}.
      Last POST wins. No claims, priorities or heartbeats. No auth: anything
      that can reach the port can put a page on the panel, so LAN only.
   2. Keeps a Google Chrome kiosk window pointed at http://127.0.0.1:7781/,
@@ -173,6 +183,8 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 .spacer{flex:1}
 #pin.off{background:#5a3a12;color:#ffd9a0}
 #down{color:#e07b6f}
+#confirm .dur{display:block;margin:14px auto 0;padding:14px 20px}
+#confirm .dur.sel{background:#2f4f8f}
 </style>
 <div id="wrap">
   <div id="row"></div>
@@ -186,6 +198,7 @@ iframe+iframe{border-left:2px solid #1a1a1a}
     <div class="spacer"></div>
     <div id="down" hidden>edged not responding</div>
     <div class="btn" id="pin"><svg viewBox="0 0 34 22"><path d="M17 2v10M11 12h12l-2-6h-8zM17 12v9" fill="none" stroke="currentColor" stroke-width="2"/></svg><span id="pinl">unpin</span></div>
+    <div class="btn" id="desk"><svg viewBox="0 0 34 22"><path d="M4 2h26v14H4zM12 20h10M17 16v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>desktop</div>
   </div>
 </div>
 <script>
@@ -306,6 +319,25 @@ function confirmDelete(c, t){
 $('tiles').addEventListener('pointerdown', () => { hit($('tiles')); showPicker($('pick').hidden); });
 if (new URLSearchParams(location.search).get('picker')) showPicker(true);  // for screenshots
 $('reload').addEventListener('pointerdown', () => { hit($('reload')); current = null; poll(); });
+// desktop: close the kiosk browser (this page goes with it), so the confirmation picks
+// when edged brings it back; "until I bring it back" means POST /kiosk/start or an edged restart.
+const STOP_CHOICES = [['15 minutes', 900], ['1 hour', 3600], ['until I bring it back', null]];
+function confirmStop(){
+  let pick = 0;
+  $('confirmq').textContent = 'Close the kiosk and show the desktop? Bring it back after:';
+  const durs = STOP_CHOICES.map(([label], i) => {
+    const d = document.createElement('span');
+    d.className = 'dur' + (i === pick ? ' sel' : ''); d.textContent = label;
+    d.onclick = () => { pick = i; durs.forEach((x, j) => x.classList.toggle('sel', j === i)); };
+    return d;
+  });
+  $('confirmq').after(...durs);
+  const close = () => { durs.forEach(d => d.remove()); $('confirm').hidden = true; };
+  $('confirm').hidden = false;
+  $('no').onclick = close;
+  $('yes').onclick = () => { const s = STOP_CHOICES[pick][1]; close(); post('/kiosk/stop', s ? {seconds: s} : {}); };
+}
+$('desk').addEventListener('pointerdown', () => { hit($('desk')); confirmStop(); });
 $('pin').addEventListener('pointerdown', () => { hit($('pin')); repinAt ? post('/front') : post('/release', {seconds: REPIN_SECONDS}); });
 function tick(){ $('t').textContent = new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}).replace(/\\s?[AP]M/, ''); }
 tick(); setInterval(tick, 5000); setInterval(drawPin, 1000);
@@ -443,6 +475,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "pinned": pinned,
                 "repin_in": None if pinned or repin_at is None else max(0, round(repin_at - time.monotonic())),
                 "laptops": len(self.relay.status()),
+                "kiosk": "stopped" if kiosk_stopped else "running",
+                "restart_in": None if not kiosk_stopped or restart_at is None
+                else max(0, round(restart_at - time.monotonic())),
             })
         elif path == "/relays":
             self.json(200, self.relay.status())
@@ -498,6 +533,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 found = release(seconds)
                 log(f"release from {who}: window found={found}, " + (f"re-pin in {seconds}s" if seconds else "until /front"))
                 self.json(200, {"released": found, "pinned": False, "repin_in": seconds})
+            elif path == "/kiosk/stop":
+                seconds = self.body().get("seconds")
+                if seconds is not None and not (isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+                                                and 0 < seconds <= 86400):
+                    raise ValueError("seconds must be in (0, 86400]")
+                stop_kiosk(seconds)
+                log(f"kiosk stop from {who}: " + (f"restart in {seconds}s" if seconds else "until /kiosk/start"))
+                self.json(200, {"stopped": True, "restart_in": seconds})
+            elif path == "/kiosk/start":
+                start_kiosk()
+                log(f"kiosk start from {who}")
+                self.json(200, {"started": True})
             elif path in ("/layout", "/slot"):
                 body = self.body()
                 slots = self.layout.set(body) if path == "/layout" else self.layout.set_slot(body)
@@ -532,6 +579,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 _kiosk = None
 pinned = True  # kiosk stays above every window (taskbar, pop-ups) until POST /release
 repin_at: float | None = None  # time.monotonic() when a timed /release ends
+kiosk_stopped = False  # POST /kiosk/stop: the browser is closed on purpose and not relaunched
+restart_at: float | None = None  # time.monotonic() when a timed /kiosk/stop ends
 
 
 def kiosk():
@@ -614,11 +663,41 @@ def release(seconds: float | None = None) -> bool:
     return bool(hwnd)
 
 
+def stop_kiosk(seconds: float | None = None) -> None:
+    """Close the kiosk browser and hold the supervisor off until start_kiosk() or the timer."""
+    global kiosk_stopped, restart_at
+    kiosk_stopped = True  # set before the kill, so the supervisor never relaunches in between
+    restart_at = time.monotonic() + seconds if seconds else None
+    kiosk().kill()
+
+
+def start_kiosk() -> None:
+    """End a stop; the supervisor relaunches on its next tick, and the new window is pinned."""
+    global kiosk_stopped, restart_at
+    kiosk_stopped, restart_at = False, None
+    pin(raise_now=False)  # supervise_browser's bring_to_front raises the relaunched window
+
+
+def may_run_kiosk(now: float | None = None) -> bool:
+    """The supervisor's gate: False while stopped; ends a timed stop whose time has come."""
+    if not kiosk_stopped:
+        return True
+    if restart_at is not None and (time.monotonic() if now is None else now) >= restart_at:
+        start_kiosk()
+        log("timed kiosk stop ended; relaunching")
+        return True
+    return False
+
+
 def supervise_browser() -> None:
     k = kiosk()
     last_launch = 0.0
     windowless_since: float | None = None
     while True:
+        if not may_run_kiosk():  # stopped on purpose: no wedge check, no kill, no log
+            windowless_since = None
+            time.sleep(3)
+            continue
         running = k.running()
         if running:
             # A live browser with no kiosk window is wedged, and the relaunch below will
