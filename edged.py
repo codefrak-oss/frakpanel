@@ -142,9 +142,9 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 #pick .slot{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;padding:14px 18px;box-sizing:border-box;overflow-y:auto;touch-action:pan-y;scrollbar-width:none}
 #pick .slot+.slot{border-left:2px solid #22262f}
 #pick h2{margin:0 0 4px;font-size:18px;font-weight:400;color:#5c6270}
-#pick .card{height:88px;flex:none;border-radius:14px;background:#171b24;border:2px solid #171b24;display:flex;flex-direction:column;justify-content:center;padding:0 22px;box-sizing:border-box;touch-action:manipulation}
+#pick .card{min-height:88px;flex:none;border-radius:14px;background:#171b24;border:2px solid #171b24;display:flex;flex-direction:column;justify-content:center;padding:10px 22px;box-sizing:border-box;touch-action:manipulation}
 #pick .card b{font-size:24px;font-weight:500;color:#e6e6e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#pick .card small{font-size:14px;color:#8a8f98}
+#pick .card small{font-size:14px;color:#8a8f98;display:block;white-space:normal;overflow-wrap:break-word}
 #pick .card.on{border-color:#6fcf97}
 #pick .card.off b{color:#5c6270}
 #tiles.open{background:#2a3140;color:#e6e6e6}
@@ -233,7 +233,7 @@ async function fillPicker(){
       const c = document.createElement('div');
       c.className = 'card' + (t.url === cur ? ' on' : '') + (t.online ? '' : ' off');
       const b = document.createElement('b'); b.textContent = t.title;
-      const s = document.createElement('small'); s.textContent = t.laptop ? t.laptop + (t.online ? '' : ' \u00b7 away') : 'local';
+      const s = document.createElement('small'); s.textContent = t.laptop ? 'webserver registers itself to frakpanel web server \u00b7 ' + t.laptop + (t.online ? '' : ' \u00b7 away') : 'frakpanel connects to web server';
       c.append(b, s);
       c.addEventListener('click', () => { hit(c); showPicker(false); post('/slot', {slot: i, url: t.url}); });  // click, not pointerdown: a scroll drag must not pick
       return c;
