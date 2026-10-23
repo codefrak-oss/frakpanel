@@ -184,9 +184,11 @@ panel is the target that counts.
   the page it has until the slot's URL changes. Tap `reload` in the column,
   or clear the slot and set it back.
 - **Headless `--screenshot` hangs on live pages** (see the PNG recipe above).
-- **Shrinking an iframe preview with `transform: scale()` silently swallows
-  every click** into the framed tile in WebKit. CSS `zoom` on the container
-  passes clicks through. That is why the Übersicht widget uses `zoom`.
+- **A scaled iframe in Übersicht takes no clicks.** `transform: scale()`
+  and CSS `zoom` (on the iframe or its container) both swallowed every
+  click in tests on 2026-10-23; only an unscaled iframe got them. The
+  Übersicht widgets are view only; `desk_tiles.swift` loads each tile as a
+  top-level WKWebView scaled with `pageZoom`, which takes clicks.
 - **`zoom` on an iframe applies twice in WebKit**: the framed page lays out
   at width x zoom and is then drawn at zoom again, so a page sized by `%`,
   flex or `vw` fills only zoom x zoom of the frame. `frakpanel-tiles.jsx`
