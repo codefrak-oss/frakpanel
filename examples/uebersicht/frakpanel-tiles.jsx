@@ -4,8 +4,9 @@
 // Settings live in localStorage. Relay tiles load from their port on the hub
 // (GET /relays), as remote virtual Edge windows do; ?cursor=1 keeps the pointer.
 //
-// Scaling: transform: scale() drops every click in Übersicht's WebKit, so
-// tiles use zoom. WebKit applies a zoomed iframe's zoom twice (its page lays
+// View only: Übersicht delivers no clicks to a scaled iframe (zoom or
+// transform); for clickable tiles use desk_tiles.swift at the repo root.
+// Scaling: tiles use zoom. WebKit applies a zoomed iframe's zoom twice (its page lays
 // out at width * zoom, then draws at zoom again), so the iframe is W/s x H/s:
 // the page lays out at 812x720 and draws at s, inside a box clipped to it.
 //

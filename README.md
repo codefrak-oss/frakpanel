@@ -49,7 +49,7 @@ Not affiliated with or endorsed by Corsair. "Xeneon" is their trademark.
 | `edge-shot.ps1`, `edge-shot.sh` | panel host | Screenshot the panel, for checking it over ssh. |
 | `examples/demo_tile.py` | laptop | A complete working tile: a page, an SSE stream, and a timed tap round trip. |
 | `examples/self_hosted_tile.py` | laptop or host | A tile that polls a self-hosted HTTP API server-side and renders its data. |
-| `examples/uebersicht/` | Mac | Optional [Übersicht](https://tracesof.net/uebersicht/) widgets: `edge-tile-preview.jsx` previews a tile at slot size on the desktop; `frakpanel-tiles.jsx` shows 1-4 tiles from a hub, picked and sized from a ⚙ panel. |
+| `examples/uebersicht/` | Mac | Optional [Übersicht](https://tracesof.net/uebersicht/) widgets: `edge-tile-preview.jsx` previews a tile at slot size on the desktop; `frakpanel-tiles.jsx` shows 1-4 tiles from a hub, picked and sized from a ⚙ panel, view only (for clicks, use `desk_tiles.swift`). |
 | [`TILES.md`](TILES.md) | | **How to build a tile.** Written so it can be handed, with `edgerelay.py` and `demo_tile.py`, to someone (or a coding agent) on another machine. |
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | | What the Edge is on the wire, panel settings over DDC, and why the panel isn't plugged into a Mac. |
 
@@ -107,6 +107,17 @@ listens on the LAN itself, and the hub's firewall must allow those ports.
 One relay tile can show on the panel and any number of windows at once. Laptops that
 also serve tiles still dial 7782 with `edgerelay.py`. There is no auth (see
 Security): anyone who can reach 7781 can change any display.
+
+**Desk tiles on macOS** (`desk_tiles.swift`): 1-4 tiles from a hub pinned to
+the desktop in the top-right corner, scaled (30-80% of a slot) and
+clickable, on every Space and ignored by tiling window managers such as
+AeroSpace. A ▦ menu bar item picks the size, how many tiles, the tile in
+each slot and the hub. Needs the Xcode command line tools:
+
+```
+swiftc -O desk_tiles.swift -o desk_tiles
+./desk_tiles --hub http://nuc.local:7781      # the hub is remembered after
+```
 
 **On the panel host** (the Edge plugged in as a display at 2560x720, scale
 100%, with Google Chrome installed), download the latest
