@@ -98,7 +98,10 @@ curl and MCP, add `?display=<id>` to `/layout`, `/slot`, `/tiles` (or a
 /displays` and MCP `list_displays` list them. The laptop only needs to reach
 port 7781 on the hub's address (LAN IP, `.local` name or Tailscale name, no
 special code for either): relay tiles, whose ports listen on 127.0.0.1 on
-the hub, are proxied to remote viewers at `/relay/<name>/`, so one relay
+the hub, are proxied to remote viewers at `/relay/<name>/`, and host-local
+tiles (`http://127.0.0.1:<port>/` or `http://localhost:<port>/`, such as the
+desk KVM or `local_tiles.json` entries) at `/local/<port>/` (forwarded to
+127.0.0.1 only), so one relay
 tile can show on the panel and any number of windows at once. Laptops that
 also serve tiles still dial 7782 with `edgerelay.py`. There is no auth (see
 Security): anyone who can reach 7781 can change any display.

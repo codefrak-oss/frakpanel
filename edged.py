@@ -72,6 +72,12 @@ Two jobs in one process:
                        this port, for a viewer on another machine (the relay
                        ports listen on 127.0.0.1 only). GET /layout hands a
                        non-loopback viewer these URLs instead of 127.0.0.1 ones.
+       GET  /local/<port>/<path>, POST likewise: a host-local tile
+                       (http://127.0.0.1:<port>/ or http://localhost:<port>/,
+                       e.g. the desk KVM or a local_tiles.json entry) proxied
+                       over this port; GET /layout hands a non-loopback viewer
+                       these URLs. Forwards to 127.0.0.1 only; an unreachable
+                       port answers 502 {"error": ...}.
      Displays: GET/POST /layout, POST /slot, GET /tiles, / and /virtual take
      ?display=<id> ([a-z0-9_-]{1,32}; /layout and /slot also a body field
      "display"), so each virtual Edge window keeps its own slots; no display
@@ -569,6 +575,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if local is None:
                 return f"/home?waiting={name}"
             return f"/relay/{name}/{rest.lstrip('/')}" if self.remote() else local
+        if self.remote():
+            u = urllib.parse.urlsplit(url)
+            if u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost"):
+                path = u.path.lstrip("/") + (f"?{u.query}" if u.query else "")
+                return f"/local/{u.port or 80}/{path}"
         return url
 
     def display(self, body: dict | None = None) -> str:
@@ -584,16 +595,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.json(502, {"error": f"relay {name!r} is not connected"})
             return
         u = urllib.parse.urlsplit(target)
+        self.forward(method, u.hostname, u.port, rest, f"relay {name!r}")
+
+    def proxy_local(self, method: str) -> None:
+        """/local/<port>/<path>: a host-local tile over port 7781; only ever forwards to 127.0.0.1."""
+        port, _, rest = self.path[len("/local/"):].partition("/")
+        if not port.isdigit() or not 0 < int(port) < 65536:
+            self.json(400, {"error": f"bad port {port!r}"})
+            return
+        self.forward(method, "127.0.0.1", int(port), rest, f"local port {port}")
+
+    def forward(self, method: str, host: str, port: int, rest: str, what: str) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         data = self.rfile.read(length) if length else None
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}
-        conn = http.client.HTTPConnection(u.hostname, u.port, timeout=30)
+        conn = http.client.HTTPConnection(host, port, timeout=30)
         try:
             conn.request(method, "/" + rest, body=data, headers=headers)
             r = conn.getresponse()
             payload = r.read()
         except OSError as exc:
-            self.json(502, {"error": f"relay {name!r}: {exc}"})
+            self.json(502, {"error": f"{what}: {exc}"})
             return
         finally:
             conn.close()
@@ -609,6 +631,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path.startswith("/relay/"):
             self.proxy_relay("GET")
+            return
+        if path.startswith("/local/"):
+            self.proxy_local("GET")
             return
         try:
             display = self.display()
@@ -668,6 +693,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         who = self.client_address[0]
         if path.startswith("/relay/"):
             self.proxy_relay("POST")
+            return
+        if path.startswith("/local/"):
+            self.proxy_local("POST")
             return
         if path == "/mcp":
             status, out = self.mcp.respond(self.rfile.read(int(self.headers.get("Content-Length") or 0)),
