@@ -119,11 +119,17 @@ swiftc -O desk_tiles.swift -o desk_tiles
 ./desk_tiles --hub http://nuc.local:7781      # the hub is remembered after
 ```
 
-To start it at login, wrap it in an app bundle (with
-`NSLocalNetworkUsageDescription` in its Info.plist, ad-hoc signed with
-`codesign -s -`) and point a LaunchAgent at the bundle's binary: a bare
-binary started by launchd gets no Local Network permission, so it can't
-reach the hub, while one started from a terminal borrows the terminal's.
+To install it as an app that starts at login (also on a Mac without a
+clone of this repo):
+
+```
+curl -fsSL https://raw.githubusercontent.com/codefrak-oss/frakpanel/main/install-desk-tiles.sh | sh -s -- --hub http://nuc.local:7781
+```
+
+It builds `~/Applications/Frakpanel Desk Tiles.app` and a LaunchAgent; run
+it again to update. The app bundle matters: a bare binary started by
+launchd gets no Local Network permission, so it can't reach the hub,
+while one started from a terminal borrows the terminal's.
 
 **On the panel host** (the Edge plugged in as a display at 2560x720, scale
 100%, with Google Chrome installed), download the latest
