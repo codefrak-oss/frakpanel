@@ -1,6 +1,5 @@
 """Per-display layouts, the panel's back-compat, and the relay proxy: python3 -m unittest discover -s tests"""
 import http.client
-import http.server
 import json
 import os
 import sys
@@ -120,37 +119,18 @@ class PanelBackCompatTest(Base):
         self.assertFalse(os.path.exists(edged.LAYOUTS_DIR))
 
 
-class Stub(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
-
-    def do_GET(self):
-        data = f"stub {self.path}".encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_POST(self):
-        data = self.rfile.read(int(self.headers["Content-Length"]))
-        self.send_response(201)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
 class RelayTest(Base):
     def handler(self, client):
         h = edged.Handler.__new__(edged.Handler)
         h.relay, h.client_address = Relay(9999), (client, 1234)
+        h.headers = {"Host": "nuc.local:7781"}
         return h
 
     def test_resolve_by_client(self):
         self.assertEqual(self.handler("127.0.0.1").resolve("relay://air/x"), "http://127.0.0.1:9999/x")
         self.assertEqual(self.handler("::1").resolve("relay://air/x"), "http://127.0.0.1:9999/x")
-        self.assertEqual(self.handler("192.168.1.20").resolve("relay://air/x"), "/relay/air/x")
-        self.assertEqual(self.handler("::ffff:100.64.0.5").resolve("relay://air/"), "/relay/air/")
+        self.assertEqual(self.handler("192.168.1.20").resolve("relay://air/x"), "http://nuc.local:9999/x")
+        self.assertEqual(self.handler("::ffff:100.64.0.5").resolve("relay://air/"), "http://nuc.local:9999/")
         self.assertEqual(self.handler("192.168.1.20").resolve("relay://gone/"), "/home?waiting=gone")
 
     def test_two_displays_one_relay(self):
@@ -159,18 +139,6 @@ class RelayTest(Base):
             self.req("POST", f"/slot?display={d}", {"slot": 0, "url": "relay://air/"})
         for d in ("panel", "work"):
             self.assertEqual(self.req("GET", f"/layout?display={d}")[1]["slots"][0], "http://127.0.0.1:0/")
-
-    def test_proxy_forwards(self):
-        stub = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stub)
-        threading.Thread(target=stub.serve_forever, daemon=True).start()
-        self.addCleanup(stub.server_close)
-        self.addCleanup(stub.shutdown)
-        self.serve(Relay(stub.server_address[1]))
-        status, body = self.req("GET", "/relay/air/page?q=1")
-        self.assertEqual((status, body), (200, b"stub /page?q=1"))
-        status, body = self.req("POST", "/relay/air/api", {"x": 1})
-        self.assertEqual((status, body), (201, b'{"x": 1}'))
-        self.assertEqual(self.req("GET", "/relay/gone/")[0], 502)
 
 
 if __name__ == "__main__":

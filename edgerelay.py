@@ -21,11 +21,14 @@ Protocol: TCP port 7782 (EDGE_RELAY_PORT), each connection starts with one JSON 
     so keep-alive, streaming responses and WebSocket upgrades pass through as-is,
     and a slow response on one connection never stalls another.
 
-Each client name gets its own 127.0.0.1-only listener port on the panel host
-(stable across reconnects, recorded in edge_relays.json), so pages can use
-absolute paths without any rewriting. A slot refers to it as
-relay://<name>/<path>; edged resolves that to http://127.0.0.1:<port>/<path>
-while the client is connected, and to its /home fallback while it isn't.
+Each client name gets its own listener port on the panel host (stable across
+reconnects, recorded in edge_relays.json), so pages can use absolute paths
+without any rewriting. It listens on the LAN (EDGE_RELAY_BIND, default
+0.0.0.0) so virtual Edge windows on other machines can load the tile from it
+directly. A slot refers to it as relay://<name>/<path>; edged resolves that
+to http://127.0.0.1:<port>/<path> for the panel (the hub's name instead of
+127.0.0.1 for a remote viewer) while the client is connected, and to its
+/home fallback while it isn't.
 
 The server also remembers every name that has connected since it started, with
 its title, so the picker can list a laptop's tile (greyed) while it is away.
@@ -50,6 +53,7 @@ import threading
 import time
 
 RELAY_PORT = int(os.environ.get("EDGE_RELAY_PORT", "7782"))
+RELAY_BIND = os.environ.get("EDGE_RELAY_BIND", "0.0.0.0")  # the per-client listener ports
 FIRST_CLIENT_PORT = 7790
 TIMEOUT = 15.0  # seconds without a control message before a client is dropped
 PING_EVERY = 5.0
@@ -178,7 +182,7 @@ class RelayServer:
                 return
             ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            ls.bind(("127.0.0.1", port))
+            ls.bind((RELAY_BIND, port))
             ls.listen(64)
             self.listeners[name] = ls
         threading.Thread(target=self.accept_browsers, args=(name, ls), daemon=True).start()

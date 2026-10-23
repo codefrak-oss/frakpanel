@@ -71,9 +71,9 @@ curl -s http://$FRAKPANEL_HOST:7781/tiles                                       
   on the work laptop.
 - **Several displays.** A relay tile is one tile for every display: the
   panel and any virtual Edge windows (`virtual_edge.py --hub`, README) can
-  each place it, several at once. Windows on other machines load it through
-  edged's `/relay/<name>/<path>` proxy on 7781, so a tile that links with
-  absolute paths (`/api/x`) should use relative ones (`api/x`) to work there.
+  each place it, several at once. Windows on other machines load it straight
+  from its relay port on the hub (7790 and up, on the LAN), so absolute paths
+  and event streams work there as they do on the panel.
 - **No auth anywhere.** edged trusts the LAN. Don't put a tile on the panel
   that shouldn't be readable by whoever is at the desk.
 
