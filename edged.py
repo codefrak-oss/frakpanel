@@ -52,6 +52,9 @@ Two jobs in one process:
                        picker offers (the /tiles list, clock included), and get_layout / set_slot
                        {slot, url} read and change the slots like GET /layout
                        and POST /slot; see mcp_tiles.py and TILES.md.
+       GET  /virtual   the virtual Edge (virtual_edge.py): the shell in a
+                       2560x720 iframe, scaled to fit the window at 2560:720
+                       and letterboxed, so a Mac can stand in for the panel.
        GET  /home      host-local placeholder page (clock, "nothing claimed").
        POST /front     pin the kiosk window above every other window (default).
        POST /release   unpin it, so other windows (e.g. over RDP) can come
@@ -346,6 +349,25 @@ poll(); setInterval(poll, 2000);
 document.addEventListener('contextmenu', e => e.preventDefault());  // long-press menu
 </script>""".replace("__REPIN_SECONDS__", str(REPIN_SECONDS))
 
+VIRTUAL_PAGE = """<!doctype html><meta charset="utf-8"><title>frakpanel virtual Edge</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#000}
+iframe{position:absolute;left:0;top:0;width:2560px;height:720px;border:0;transform-origin:0 0}
+</style>
+<iframe id="edge" src="/"></iframe>
+<script>
+// fit the 2560x720 shell to the window, keeping its aspect; CSS transforms map
+// pointer coordinates back, so clicks land where they would on the panel
+const f = document.getElementById('edge');
+function fit() {
+  const W = innerWidth, H = innerHeight, s = Math.min(W / 2560, H / 720);
+  f.style.transform = 'translate(' + (W - 2560 * s) / 2 + 'px,' + (H - 720 * s) / 2 + 'px) scale(' + s + ')';
+}
+addEventListener('resize', fit);
+fit();
+</script>
+"""
+
 SHELL_HASH = hashlib.sha1((SHELL_PAGE + HOME_PAGE).encode()).hexdigest()[:12]
 
 
@@ -475,6 +497,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/":
             self.reply(200, SHELL_PAGE, "text/html; charset=utf-8")
+        elif path == "/virtual":
+            self.reply(200, VIRTUAL_PAGE, "text/html; charset=utf-8")
         elif path == "/home":
             self.reply(200, HOME_PAGE, "text/html; charset=utf-8")
         elif path == "/layout":

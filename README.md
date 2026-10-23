@@ -65,6 +65,20 @@ curl -XPOST http://127.0.0.1:7781/slot -d '{"slot":0,"url":"relay://demo/"}'
 open http://127.0.0.1:7781/                     # the shell, in a 2560x720 window for the real look
 ```
 
+**Virtual Edge on macOS**: instead of `edged.py --no-browser` and `open`, run
+
+```
+python3 virtual_edge.py                         # edged (no kiosk) + a resizable Edge window
+```
+
+It starts edged without the kiosk and opens a Google Chrome app window on
+`/virtual`: the 2560x720 shell scaled to fit, keeping its aspect, so resize
+the window freely. Mouse clicks and drags act as touches (taps, the picker's
+swipe-to-delete). `--size 1920x540` sets the starting window, `--no-edged`
+attaches to an edged already running, `--port` picks its port. Without
+Chrome it opens the page in the default browser. Ctrl-C or closing the
+window stops edged. Start the demo tile and relay as above to fill a slot.
+
 **On the panel host** (the Edge plugged in as a display at 2560x720, scale
 100%, with Google Chrome installed), download the latest
 [release](https://github.com/codefrak-oss/frakpanel/releases), unzip it, and
