@@ -155,6 +155,7 @@ KEEPER_LOG_EVERY = 60.0  # seconds; the keeper can re-pin 4x/s, so log at most t
 HOME_PAGE = """<!doctype html><meta charset="utf-8"><title>frakpanel home</title>
 <style>
 html,body{margin:0;height:100%;background:#000;color:#8a8f98;font-family:system-ui,sans-serif;cursor:none;overflow:hidden}
+html.cursor,html.cursor *{cursor:auto}
 body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2vh}
 #t,#s{white-space:nowrap;max-width:94vw;overflow:hidden;text-overflow:ellipsis}
 #t{font-size:min(36vh,17vw);line-height:1;color:#e6e6e6;font-variant-numeric:tabular-nums;font-weight:200}
@@ -162,6 +163,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
 </style>
 <div id="t"></div><div id="s">__HOSTNAME__ &middot; nothing claimed this slot</div>
 <script>
+if(new URLSearchParams(location.search).has('cursor'))document.documentElement.classList.add('cursor');
 const t=document.getElementById('t');
 const waiting=new URLSearchParams(location.search).get('waiting');
 if(waiting)document.getElementById('s').textContent='waiting for '+waiting+' to connect';
@@ -172,6 +174,7 @@ tick();setInterval(tick,1000);
 SHELL_PAGE = """<!doctype html><meta charset="utf-8"><title>frakpanel shell</title>
 <style>
 html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;cursor:none;user-select:none;font-family:system-ui,sans-serif}
+html.cursor,html.cursor *{cursor:auto}
 #wrap{display:flex;width:100%;height:100%;position:relative}
 #row{flex:1;display:flex;min-width:0}
 iframe{border:0;height:100%;min-width:0;flex:1;background:#000}
@@ -229,11 +232,20 @@ const $ = id => document.getElementById(id);
 const REPIN_SECONDS = __REPIN_SECONDS__;
 const DISPLAY = new URLSearchParams(location.search).get('display');  // a virtual Edge's own layout; none is the panel
 const Q = DISPLAY ? '?display=' + encodeURIComponent(DISPLAY) : '';
+// ?cursor=1 (the virtual Edge window): show the pointer here and pass it on to
+// every tile, per the TILES.md convention; tiles on other origins can't be styled from here
+const CURSOR = new URLSearchParams(location.search).has('cursor');
+if (CURSOR) document.documentElement.classList.add('cursor');
+function tileUrl(url){
+  if (!CURSOR) return url;
+  try { const u = new URL(url, location.href); u.searchParams.set('cursor', '1'); return u.href; }
+  catch (e) { return url; }
+}
 let current = null, shell = null, repinAt = 0, fails = 0;
 function render(slots){
   $('row').replaceChildren(...slots.map(url => {
     const f = document.createElement('iframe');
-    f.src = url || '/home';
+    f.src = tileUrl(url || '/home');
     f.allow = 'autoplay; fullscreen; clipboard-read; clipboard-write';
     return f;
   }));
@@ -377,7 +389,10 @@ iframe{position:absolute;left:0;top:0;width:2560px;height:720px;border:0;transfo
 </style>
 <iframe id="edge" src="/"></iframe>
 <script>
-if (location.search) document.getElementById('edge').src = '/' + location.search;  // ?display=<id>: this window's layout
+// ?display=<id>: this window's layout; cursor=1: the shell and its tiles show the pointer
+const q = new URLSearchParams(location.search);
+q.set('cursor', '1');
+document.getElementById('edge').src = '/?' + q;
 // fit the 2560x720 shell to the window, keeping its aspect; CSS transforms map
 // pointer coordinates back, so clicks land where they would on the panel
 const f = document.getElementById('edge');
@@ -387,14 +402,6 @@ function fit() {
 }
 addEventListener('resize', fit);
 fit();
-// the shell hides the cursor for the touch-only kiosk; restore it here so the
-// virtual window still shows a mouse pointer
-f.addEventListener('load', function() {
-  const doc = f.contentDocument;
-  const style = doc.createElement('style');
-  style.textContent = 'html,body{cursor:auto!important}';
-  doc.head.appendChild(style);
-});
 </script>
 """
 
