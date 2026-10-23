@@ -96,13 +96,11 @@ class VirtualPageTest(unittest.TestCase):
         r = c.getresponse()
         body = r.read().decode()
         self.assertEqual(r.status, 200)
-        self.assertIn('src="/"', body)
+        self.assertIn("q.set('cursor', '1')", body)
         self.assertIn("width:2560px;height:720px", body)
         self.assertIn("overflow:hidden", body)
         self.assertIn("Math.min(W / 2560, H / 720)", body)
         self.assertIn("addEventListener('resize', fit)", body)
-        self.assertIn("cursor:auto!important", body)
-        self.assertIn("addEventListener('load'", body)
 
     def test_shell_still_hides_cursor(self):
         srv = edged.Server(("127.0.0.1", 0), edged.Handler)
@@ -115,4 +113,5 @@ class VirtualPageTest(unittest.TestCase):
         body = r.read().decode()
         self.assertEqual(r.status, 200)
         self.assertIn("cursor:none", body)
-        self.assertNotIn("cursor:auto", body)
+        self.assertIn("html.cursor,html.cursor *{cursor:auto}", body)  # only with ?cursor=1
+        self.assertIn("u.searchParams.set('cursor', '1')", body)
