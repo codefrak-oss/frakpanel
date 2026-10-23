@@ -119,6 +119,12 @@ swiftc -O desk_tiles.swift -o desk_tiles
 ./desk_tiles --hub http://nuc.local:7781      # the hub is remembered after
 ```
 
+To start it at login, wrap it in an app bundle (with
+`NSLocalNetworkUsageDescription` in its Info.plist, ad-hoc signed with
+`codesign -s -`) and point a LaunchAgent at the bundle's binary: a bare
+binary started by launchd gets no Local Network permission, so it can't
+reach the hub, while one started from a terminal borrows the terminal's.
+
 **On the panel host** (the Edge plugged in as a display at 2560x720, scale
 100%, with Google Chrome installed), download the latest
 [release](https://github.com/codefrak-oss/frakpanel/releases), unzip it, and
