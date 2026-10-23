@@ -79,6 +79,30 @@ attaches to an edged already running, `--port` picks its port. Without
 Chrome it opens the page in the default browser. Ctrl-C or closing the
 window stops edged. Start the demo tile and relay as above to fill a slot.
 
+**Remote virtual Edge** (a laptop showing its own layout from the panel
+host's edged, e.g. a personal laptop over Tailscale or a work laptop on the
+home LAN): point `--hub` at the panel host and no local edged is started:
+
+```
+python3 virtual_edge.py --hub http://nuc.local:7781 --display work
+```
+
+Each display keeps its own three slots on the one hub: `panel` is the
+physical Edge (the default for every API call without a display, and still
+stored in `edge_layout.json`, so an existing setup is unchanged), and each
+virtual Edge window has its own id (`--display`, default this machine's
+hostname), stored in `edge_layouts/<id>.json`. Picking a tile on one display
+never changes another; every display's picker offers the same tiles. For
+curl and MCP, add `?display=<id>` to `/layout`, `/slot`, `/tiles` (or a
+`"display"` body field), `display` to `get_layout`/`set_slot`; `GET
+/displays` and MCP `list_displays` list them. The laptop only needs to reach
+port 7781 on the hub's address (LAN IP, `.local` name or Tailscale name, no
+special code for either): relay tiles, whose ports listen on 127.0.0.1 on
+the hub, are proxied to remote viewers at `/relay/<name>/`, so one relay
+tile can show on the panel and any number of windows at once. Laptops that
+also serve tiles still dial 7782 with `edgerelay.py`. There is no auth (see
+Security): anyone who can reach 7781 can change any display.
+
 **On the panel host** (the Edge plugged in as a display at 2560x720, scale
 100%, with Google Chrome installed), download the latest
 [release](https://github.com/codefrak-oss/frakpanel/releases), unzip it, and

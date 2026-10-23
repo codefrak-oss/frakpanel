@@ -47,7 +47,7 @@ class McpTest(unittest.TestCase):
         self.assertIsNone(self.server.handle(b'{"jsonrpc":"2.0","method":"notifications/initialized"}'))
         names = {t["name"] for t in self.rpc("tools/list")["result"]["tools"]}
         self.assertEqual(names, {"frakpanel_guide", "register_tile", "list_tiles", "remove_tile",
-                                 "get_layout", "set_slot", "screenshot"})
+                                 "get_layout", "list_displays", "set_slot", "screenshot"})
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.server.handle(b"{bad")["error"]["code"], -32700)
 
@@ -152,6 +152,9 @@ class McpLayoutTest(McpTest):
         old = edged.LAYOUT_PATH
         edged.LAYOUT_PATH = self.layout_path = os.path.join(self.dir.name, "layout.json")
         self.addCleanup(setattr, edged, "LAYOUT_PATH", old)
+        old_dir = edged.LAYOUTS_DIR
+        edged.LAYOUTS_DIR = os.path.join(self.dir.name, "layouts")
+        self.addCleanup(setattr, edged, "LAYOUTS_DIR", old_dir)
         return mcp_tiles.McpServer(mcp_tiles.TileRegistry(self.path), "test", layout=edged.Layout())
 
     def test_get_layout(self):
@@ -165,6 +168,21 @@ class McpLayoutTest(McpTest):
         with open(self.layout_path, encoding="utf-8") as f:
             self.assertEqual(json.load(f), out)
         self.assertEqual(self.call("set_slot", slot=1, url="")[1], {"slots": ["", "", ""]})
+
+    def test_set_slot_display_isolated(self):
+        out = self.call("set_slot", slot=0, url=TILE["url"], display="work")[1]
+        self.assertEqual(out, {"slots": [TILE["url"], "", ""]})
+        self.assertEqual(self.call("get_layout", display="work")[1], out)
+        self.assertEqual(self.call("get_layout")[1], {"slots": ["", "", ""]})  # the panel is untouched
+        self.assertFalse(os.path.exists(self.layout_path))
+        self.assertEqual(self.call("list_displays")[1],
+                         {"displays": {"panel": ["", "", ""], "work": [TILE["url"], "", ""]}})
+        self.assertTrue(self.call("get_layout", display="Bad id!")[0]["isError"])
+
+    def test_set_slot_without_display_is_panel(self):
+        self.call("set_slot", slot=2, url=TILE["url"])
+        self.assertEqual(self.call("get_layout", display="panel")[1], {"slots": ["", "", TILE["url"]]})
+        self.assertEqual(self.call("get_layout", display="work")[1], {"slots": ["", "", ""]})
 
     def test_set_slot_rejected(self):
         self.call("set_slot", slot=0, url=TILE["url"])
@@ -230,7 +248,7 @@ class Mcp20260728Test(unittest.TestCase):
         self.assertEqual(res["cacheScope"], "public")
         self.assertIsInstance(res["ttlMs"], int)
         self.assertEqual([t["name"] for t in res["tools"]],
-                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile", "get_layout", "set_slot", "screenshot"])
+                         ["frakpanel_guide", "register_tile", "list_tiles", "remove_tile", "get_layout", "list_displays", "set_slot", "screenshot"])
         status, out = self.post("tools/call", {"name": "register_tile", "arguments": TILE})
         self.assertEqual(status, 200)
         self.assertEqual(out["result"]["resultType"], "complete")
@@ -310,7 +328,7 @@ class EdgedHttpTest(unittest.TestCase):
                 return []
 
         class Layout:
-            def get(self):
+            def get(self, display=None):
                 return ["", "", ""]
 
         class H(edged.Handler):

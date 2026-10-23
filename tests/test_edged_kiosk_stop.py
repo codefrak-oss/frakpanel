@@ -24,7 +24,7 @@ class Kiosk:
 
 
 class Layout:
-    def get(self):
+    def get(self, display=None):
         return ["", "", ""]
 
 

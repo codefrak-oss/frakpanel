@@ -69,6 +69,11 @@ curl -s http://$FRAKPANEL_HOST:7781/tiles                                       
   tile can reach on the laptop (a corporate API, a VPN-only host, a local
   file) it can show on the panel, which is the point of hosting work tiles
   on the work laptop.
+- **Several displays.** A relay tile is one tile for every display: the
+  panel and any virtual Edge windows (`virtual_edge.py --hub`, README) can
+  each place it, several at once. Windows on other machines load it through
+  edged's `/relay/<name>/<path>` proxy on 7781, so a tile that links with
+  absolute paths (`/api/x`) should use relative ones (`api/x`) to work there.
 - **No auth anywhere.** edged trusts the LAN. Don't put a tile on the panel
   that shouldn't be readable by whoever is at the desk.
 
@@ -268,8 +273,9 @@ Tools:
 | `frakpanel_guide` | none | returns an intro to frakpanel and its MCP tools, this guide (read from the installed version) and the source of `examples/self_hosted_tile.py`; an MCP client on another machine should call it first |
 | `list_tiles` | none | every tile the picker offers, as `GET /tiles` lists them: the clock (`url` `""`), `local_tiles.json` entries, MCP-registered tiles, relay tiles; each with `url`, `title`, `online`, `deletable` |
 | `remove_tile` | `url` | removes that registered tile |
-| `get_layout` | none | `{"slots": [url, url, url]}`: what the panel shows in slots 0-2 (`""` is the clock), as `GET /tiles` reports them |
-| `set_slot` | `slot` (0-2), `url` | changes what the panel shows: puts `url` (`""` for the clock, `relay://<name>/<path>` or an http(s) URL) in that slot, exactly like `POST /slot`, and returns the new `{"slots": [...]}`. A bad slot or url returns a tool error and leaves the layout unchanged. |
+| `get_layout` | `display`? | `{"slots": [url, url, url]}`: what a display (default `panel`, the physical Edge) shows in slots 0-2 (`""` is the clock), as `GET /tiles` reports them |
+| `list_displays` | none | `{"displays": {id: [url, url, url]}}`: every display with a layout, `panel` first |
+| `set_slot` | `slot` (0-2), `url`, `display`? | changes what a display (default `panel`) shows, leaving every other display alone: puts `url` (`""` for the clock, `relay://<name>/<path>` or an http(s) URL) in that slot, exactly like `POST /slot`, and returns the new `{"slots": [...]}`. A bad slot or url returns a tool error and leaves the layout unchanged. |
 | `screenshot` | none | a PNG of what the panel host's screen shows right now (every screen, the Edge included), as an MCP image content item (`type` `image`, `mimeType` `image/png`, base64 `data`). On Linux it needs ImageMagick's `import` (`install-linux.sh` installs it); on Windows it uses PowerShell, like `edge-shot.ps1`. A failed capture returns a tool error. |
 
 Connect a client, e.g. Claude Code:

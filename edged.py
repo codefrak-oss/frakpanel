@@ -67,7 +67,17 @@ Two jobs in one process:
        POST /kiosk/start  end a stop: the supervisor relaunches the browser on
                        its next tick, pinned as after a normal launch.
                        Replies {"started":true}.
-     Last POST wins. No claims, priorities or heartbeats. No auth: anything
+       GET  /displays  {"displays": {"<id>": [raw urls], ...}}: every display with a layout.
+       GET  /relay/<name>/<path>, POST likewise: a relayed tile proxied over
+                       this port, for a viewer on another machine (the relay
+                       ports listen on 127.0.0.1 only). GET /layout hands a
+                       non-loopback viewer these URLs instead of 127.0.0.1 ones.
+     Displays: GET/POST /layout, POST /slot, GET /tiles, / and /virtual take
+     ?display=<id> ([a-z0-9_-]{1,32}; /layout and /slot also a body field
+     "display"), so each virtual Edge window keeps its own slots; no display
+     is "panel", the physical panel. /tiles lists the same tiles for every
+     display. The shell passes its own ?display= on to its fetches.
+     Last POST wins (per display). No claims, priorities or heartbeats. No auth: anything
      that can reach the port can put a page on the panel, so LAN only.
   2. Keeps a Google Chrome kiosk window pointed at http://127.0.0.1:7781/,
      with its own profile dir so it never merges with a normal browser window.
@@ -85,7 +95,8 @@ Two jobs in one process:
        GET  /version   {"version", "channel", "latest", "checked", "error"}: this
                        build and what the updater last saw (updater.py).
 
-The layout survives restarts in edge_layout.json, in $FRAKPANEL_DATA (set by
+The panel's layout survives restarts in edge_layout.json, other displays' in
+edge_layouts/<id>.json, in $FRAKPANEL_DATA (set by
 launcher.py to the install's data/ dir) or else beside this file.
 
 Standard library only. Runs with:
@@ -97,13 +108,17 @@ from __future__ import annotations
 
 import hashlib
 import html
+import http.client
 import http.server
+import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import threading
 import time
+import urllib.parse
 
 import edgerelay
 import mcp_tiles
@@ -123,7 +138,11 @@ VERSION = updater.read_version(HERE)
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("EDGED_PORT", "7781"))
 LOG_PATH = os.path.join(DATA, "edged.log")
-LAYOUT_PATH = os.path.join(DATA, "edge_layout.json")
+LAYOUT_PATH = os.path.join(DATA, "edge_layout.json")  # the panel's (default display's) layout
+LAYOUTS_DIR = os.path.join(DATA, "edge_layouts")  # <display id>.json for every other display
+DEFAULT_DISPLAY = "panel"
+HOP_HEADERS = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "host"}
+DISPLAY_RE = re.compile(r"[a-z0-9_-]{1,32}")
 SLOTS = 3  # completely fixed; see the module docstring
 LOCAL_TILES_PATH = os.path.join(DATA, "local_tiles.json")  # optional; see load_local_tiles()
 MCP_TILES_PATH = os.path.join(DATA, "mcp_tiles.json")  # tiles registered through POST /mcp (mcp_tiles.py)
@@ -208,6 +227,8 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 <script>
 const $ = id => document.getElementById(id);
 const REPIN_SECONDS = __REPIN_SECONDS__;
+const DISPLAY = new URLSearchParams(location.search).get('display');  // a virtual Edge's own layout; none is the panel
+const Q = DISPLAY ? '?display=' + encodeURIComponent(DISPLAY) : '';
 let current = null, shell = null, repinAt = 0, fails = 0;
 function render(slots){
   $('row').replaceChildren(...slots.map(url => {
@@ -235,7 +256,7 @@ function apply(j){
 }
 async function poll(){
   try {
-    const r = await fetch('/layout', {cache: 'no-store'});
+    const r = await fetch('/layout' + Q, {cache: 'no-store'});
     apply(await r.json());
     fails = 0;
   } catch (e) { fails++; }  // edged restarting; keep the current slots and retry
@@ -243,7 +264,7 @@ async function poll(){
 }
 async function post(path, body){
   try {
-    await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+    await fetch(path + Q, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
   } catch (e) {}
   poll();
 }
@@ -257,7 +278,7 @@ function showPicker(open){
 }
 async function fillPicker(){
   let j;
-  try { j = await (await fetch('/tiles', {cache: 'no-store'})).json(); } catch (e) { return; }
+  try { j = await (await fetch('/tiles' + Q, {cache: 'no-store'})).json(); } catch (e) { return; }
   $('pick').replaceChildren(...j.slots.map((cur, i) => {
     const col = document.createElement('div');
     col.className = 'slot';
@@ -356,6 +377,7 @@ iframe{position:absolute;left:0;top:0;width:2560px;height:720px;border:0;transfo
 </style>
 <iframe id="edge" src="/"></iframe>
 <script>
+if (location.search) document.getElementById('edge').src = '/' + location.search;  // ?display=<id>: this window's layout
 // fit the 2560x720 shell to the window, keeping its aspect; CSS transforms map
 // pointer coordinates back, so clicks land where they would on the panel
 const f = document.getElementById('edge');
@@ -388,12 +410,41 @@ def clean_url(url) -> str:
     return url
 
 
+def clean_display(display) -> str:
+    """A display id: lowercase [a-z0-9_-]{1,32}; None or "" is the panel."""
+    if display is None or display == "":
+        return DEFAULT_DISPLAY
+    if not isinstance(display, str) or not DISPLAY_RE.fullmatch(display.lower()):
+        raise ValueError(f"display must match [a-z0-9_-]{{1,32}}, not {display!r}")
+    return display.lower()
+
+
 class Layout:
-    """Which URL is in each of the SLOTS fixed slots. "" is the /home clock."""
+    """Which URL is in each of the SLOTS fixed slots, per display. "" is the /home clock.
+
+    The panel (display "panel", the default) keeps edge_layout.json as before;
+    each other display (a virtual Edge window) has edge_layouts/<id>.json and
+    starts on all clocks."""
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.slots = self.load()
+        self.layouts: dict[str, list[str]] = {}
+        for name in self.stored_displays():
+            self.layouts[name] = self.load(name)
+        self.layouts.setdefault(DEFAULT_DISPLAY, self.load(DEFAULT_DISPLAY))
+
+    @staticmethod
+    def path(display: str) -> str:
+        return LAYOUT_PATH if display == DEFAULT_DISPLAY else os.path.join(LAYOUTS_DIR, display + ".json")
+
+    @staticmethod
+    def stored_displays() -> list[str]:
+        try:
+            names = os.listdir(LAYOUTS_DIR)
+        except OSError:
+            return []
+        return [n[:-5] for n in names if n.endswith(".json") and DISPLAY_RE.fullmatch(n[:-5])
+                and n[:-5] != DEFAULT_DISPLAY]
 
     @staticmethod
     def clean(obj) -> list[str]:
@@ -402,41 +453,53 @@ class Layout:
             raise ValueError(f"slots must be a list of at most {SLOTS} urls")
         return [clean_url(u) for u in slots] + [""] * (SLOTS - len(slots))
 
-    def load(self) -> list[str]:
+    def load(self, display: str = DEFAULT_DISPLAY) -> list[str]:
+        path = self.path(display)
         try:
-            with open(LAYOUT_PATH, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return self.clean(json.load(f))
         except (OSError, ValueError) as exc:
             if not isinstance(exc, FileNotFoundError):
-                log(f"ignoring {LAYOUT_PATH}: {exc}")
+                log(f"ignoring {path}: {exc}")
             return [""] * SLOTS
 
-    def save(self) -> None:  # caller holds self.lock
-        tmp = LAYOUT_PATH + ".tmp"
+    def save(self, display: str) -> None:  # caller holds self.lock
+        path = self.path(display)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"slots": self.slots}, f, indent=2)
-        os.replace(tmp, LAYOUT_PATH)
+            json.dump({"slots": self.layouts[display]}, f, indent=2)
+        os.replace(tmp, path)
 
-    def set(self, obj) -> list[str]:
+    def set(self, obj, display=None) -> list[str]:
+        display = clean_display(display)
         slots = self.clean(obj)
         with self.lock:
-            self.slots = slots
-            self.save()
-        return slots
+            self.layouts[display] = slots
+            self.save(display)
+        return list(slots)
 
-    def set_slot(self, obj) -> list[str]:
+    def set_slot(self, obj, display=None) -> list[str]:
+        display = clean_display(display)
         i = obj.get("slot")
         if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < SLOTS:
             raise ValueError(f"slot must be an integer 0-{SLOTS - 1}")
         url = clean_url(obj.get("url"))
         with self.lock:
-            self.slots[i] = url
-            self.save()
-            return list(self.slots)
+            slots = self.layouts.setdefault(display, [""] * SLOTS)
+            slots[i] = url
+            self.save(display)
+            return list(slots)
 
-    def get(self) -> list[str]:
+    def get(self, display=None) -> list[str]:
+        display = clean_display(display)
         with self.lock:
-            return list(self.slots)
+            return list(self.layouts.get(display) or [""] * SLOTS)
+
+    def displays(self) -> list[str]:
+        """Every display with a stored layout, the panel first."""
+        with self.lock:
+            return [DEFAULT_DISPLAY] + sorted(d for d in self.layouts if d != DEFAULT_DISPLAY)
 
 
 def load_local_tiles() -> list[dict]:
@@ -487,14 +550,63 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def json(self, code: int, obj) -> None:
         self.reply(code, json.dumps(obj), "application/json")
 
+    def remote(self) -> bool:
+        """The viewer is on another machine, so it cannot reach the relays' 127.0.0.1 ports."""
+        return not ipaddress.ip_address(self.client_address[0].removeprefix("::ffff:")).is_loopback
+
     def resolve(self, url: str) -> str:
         if url.startswith("relay://"):
             name, _, rest = url[len("relay://"):].partition("/")
-            return self.relay.url_for(name, rest) or f"/home?waiting={name}"
+            local = self.relay.url_for(name, rest)
+            if local is None:
+                return f"/home?waiting={name}"
+            return f"/relay/{name}/{rest.lstrip('/')}" if self.remote() else local
         return url
+
+    def display(self, body: dict | None = None) -> str:
+        """The display a request is for: ?display=, else the body's "display", else the panel."""
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("display")
+        return clean_display(q[0] if q else (body or {}).get("display"))
+
+    def proxy_relay(self, method: str) -> None:
+        """/relay/<name>/<path>: a relayed tile over port 7781, for viewers on other machines."""
+        name, _, rest = self.path[len("/relay/"):].partition("/")
+        target = self.relay.url_for(name, "")
+        if target is None:
+            self.json(502, {"error": f"relay {name!r} is not connected"})
+            return
+        u = urllib.parse.urlsplit(target)
+        length = int(self.headers.get("Content-Length") or 0)
+        data = self.rfile.read(length) if length else None
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}
+        conn = http.client.HTTPConnection(u.hostname, u.port, timeout=30)
+        try:
+            conn.request(method, "/" + rest, body=data, headers=headers)
+            r = conn.getresponse()
+            payload = r.read()
+        except OSError as exc:
+            self.json(502, {"error": f"relay {name!r}: {exc}"})
+            return
+        finally:
+            conn.close()
+        self.send_response(r.status)
+        for k, v in r.getheaders():
+            if k.lower() not in HOP_HEADERS and k.lower() != "content-length":
+                self.send_header(k, v)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path.startswith("/relay/"):
+            self.proxy_relay("GET")
+            return
+        try:
+            display = self.display()
+        except ValueError as exc:
+            self.json(400, {"error": str(exc)})
+            return
         if path == "/":
             self.reply(200, SHELL_PAGE, "text/html; charset=utf-8")
         elif path == "/virtual":
@@ -503,7 +615,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, HOME_PAGE, "text/html; charset=utf-8")
         elif path == "/layout":
             self.json(200, {
-                "slots": [self.resolve(u) for u in self.layout.get()],
+                "slots": [self.resolve(u) for u in self.layout.get(display)],
+                "display": display,
                 "shell": SHELL_HASH,
                 "pinned": pinned,
                 "repin_in": None if pinned or repin_at is None else max(0, round(repin_at - time.monotonic())),
@@ -515,7 +628,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/relays":
             self.json(200, self.relay.status())
         elif path == "/tiles":
-            self.json(200, {"tiles": self.picker_tiles(), "slots": self.layout.get()})
+            self.json(200, {"tiles": self.picker_tiles(), "slots": self.layout.get(display), "display": display})
+        elif path == "/displays":
+            self.json(200, {"displays": {d: self.layout.get(d) for d in self.layout.displays()}})
         elif path == "/version":
             self.json(200, self.updater.status())
         elif path == "/mcp":  # stateless Streamable HTTP: no server-initiated SSE stream
@@ -543,6 +658,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         who = self.client_address[0]
+        if path.startswith("/relay/"):
+            self.proxy_relay("POST")
+            return
         if path == "/mcp":
             status, out = self.mcp.respond(self.rfile.read(int(self.headers.get("Content-Length") or 0)),
                                            self.headers)
@@ -577,9 +695,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.json(200, {"started": True})
             elif path in ("/layout", "/slot"):
                 body = self.body()
-                slots = self.layout.set(body) if path == "/layout" else self.layout.set_slot(body)
-                log(f"{path[1:]} from {who}: {[u or '/home' for u in slots]}")
-                self.json(200, {"slots": slots})
+                display = self.display(body)
+                slots = self.layout.set(body, display) if path == "/layout" else self.layout.set_slot(body, display)
+                log(f"{path[1:]} {display} from {who}: {[u or '/home' for u in slots]}")
+                self.json(200, {"slots": slots, "display": display})
             elif path == "/tiles/delete":
                 url = self.body().get("url")
                 if not isinstance(url, str):
