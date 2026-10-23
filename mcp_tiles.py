@@ -18,8 +18,9 @@ Protocol versions (PROTOCOL_VERSIONS), dual-era per the 2026-07-28 spec:
   batch allowed; a POST with no MCP-Protocol-Version header is legacy.
 
 Tools: frakpanel_guide, register_tile {url, title}, list_tiles, remove_tile {url},
-get_layout, set_slot {slot, url}, screenshot. get_layout/set_slot read and
-change which tile each of the panel's slots 0-2 shows, through edged's Layout
+get_layout {display?}, set_slot {slot, url, display?}, list_displays, screenshot.
+get_layout/set_slot read and change which tile each slot 0-2 of a display
+(default "panel", the physical Edge) shows, through edged's Layout
 (passed in, so validation and persistence are exactly POST /slot's).
 screenshot returns the panel host's screen as a PNG image item, through a
 capture callable passed in (edged gives it kiosk_platform.screenshot).
@@ -59,8 +60,9 @@ This MCP server (POST http://<panel-host>:7781/mcp, no auth, LAN only) has:
   tiles; each with url, title, online and deletable.
 - remove_tile {url}: remove a tile registered here (the deletable ones that
   are not relay tiles).
-- get_layout: the URL shown in each panel slot 0-2 ("" is the clock).
-- set_slot {slot, url}: change what the panel shows in slot 0, 1 or 2.
+- get_layout {display?}: the URL shown in each slot 0-2 ("" is the clock).
+- set_slot {slot, url, display?}: change what a display shows in slot 0, 1 or 2.
+- list_displays: every display with a layout and its slots.
 - screenshot: a PNG image of what the panel host's screen shows right now.
 
 ## Fetching tiles and placing them in the three slots
@@ -82,6 +84,12 @@ Worked example: the user says "show the AI accounts tile in the middle
 slot". The client fetches the tile list (list_tiles or GET /tiles), finds
 the tile whose title matches "AI accounts", calls get_layout to see the
 current slots, then calls set_slot {"slot": 1, "url": <that tile's url>}.
+
+Each display has its own three slots: "panel" is the physical Edge panel
+(the default when display is left out), and every virtual Edge window
+(virtual_edge.py --display <id>) has its own id. get_layout and set_slot
+take an optional display; list_displays shows which exist. Changing one
+display never changes another, and every display offers the same tiles.
 
 There is no auth and the last write wins, so before replacing a slot that
 is not showing the clock, a client should confirm with the user first.
@@ -175,6 +183,9 @@ class TileRegistry:
         return True
 
 
+DISPLAY_PROP = {"type": "string", "description": "Which display: \"panel\" (the default) is the physical Edge, "
+                                               "another id a virtual Edge window (list_displays)"}
+
 TOOLS = [
     {
         "name": "frakpanel_guide",
@@ -215,6 +226,12 @@ TOOLS = [
         "name": "get_layout",
         "description": "Which tile URL the panel shows in each of its slots 0-2, as {\"slots\": [url, url, url]} "
                        "(\"\" is the clock).",
+        "inputSchema": {"type": "object", "properties": {"display": DISPLAY_PROP}},
+    },
+    {
+        "name": "list_displays",
+        "description": "Every display with a layout (\"panel\" is the physical Edge, others are virtual Edge "
+                       "windows), as {\"displays\": {id: [url, url, url]}}.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -226,6 +243,7 @@ TOOLS = [
                 "slot": {"type": "integer", "minimum": 0, "maximum": 2, "description": "The slot, 0-2"},
                 "url": {"type": "string", "description": "\"\" for the clock, relay://<name>/<path>, "
                                                          "or an http(s) URL (e.g. a tile from list_tiles)"},
+                "display": DISPLAY_PROP,
             },
             "required": ["slot", "url"],
         },
@@ -280,13 +298,16 @@ class McpServer:
                     self.log(f"mcp remove_tile {url!r}")
                     return _text({"removed": url})
                 return _text(f"no registered tile with url {url!r}", error=True)
-            if name in ("get_layout", "set_slot"):
+            if name in ("get_layout", "set_slot", "list_displays"):
                 if self.layout is None:
                     return _text("no panel layout is available", error=True)
+                if name == "list_displays":
+                    return _text({"displays": {d: self.layout.get(d) for d in self.layout.displays()}})
+                display = args.get("display")
                 if name == "get_layout":
-                    return _text({"slots": self.layout.get()})
-                slots = self.layout.set_slot({"slot": args.get("slot"), "url": args.get("url")})
-                self.log(f"mcp set_slot {args.get('slot')} {args.get('url')!r}")
+                    return _text({"slots": self.layout.get(display)})
+                slots = self.layout.set_slot({"slot": args.get("slot"), "url": args.get("url")}, display)
+                self.log(f"mcp set_slot {display or 'panel'} {args.get('slot')} {args.get('url')!r}")
                 return _text({"slots": slots})
             if name == "screenshot":
                 return self.screenshot()

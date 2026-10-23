@@ -18,7 +18,7 @@ LOCAL = {"url": "https://example.lan/local", "title": "local"}
 
 
 class Layout:
-    def get(self):
+    def get(self, display=None):
         return [TILE["url"], "", ""]
 
 

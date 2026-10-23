@@ -1,11 +1,14 @@
 """virtual_edge.py helpers and edged's GET /virtual: python3 -m unittest discover -s tests"""
 import argparse
+import contextlib
+import io
 import http.client
 import os
 import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("FRAKPANEL_DATA", tempfile.mkdtemp())
@@ -39,6 +42,38 @@ class ParseSizeTest(unittest.TestCase):
         a = ve.parse_args(["--size", "800x225", "--port", "9000", "--no-edged"])
         self.assertEqual((a.size, a.port, a.no_edged), ((800, 225), 9000, True))
         self.assertEqual(ve.parse_args([]).size, (1280, 360))
+
+
+class HubTest(unittest.TestCase):
+    def test_local_default(self):
+        a = ve.parse_args(["--port", "9000"])
+        self.assertEqual((a.hub, a.display, a.no_edged), (None, None, False))
+        self.assertEqual(ve.virtual_url(ve.hub_base(a), a.display), "http://127.0.0.1:9000/virtual")
+
+    def test_hub_skips_local_edged(self):
+        a = ve.parse_args(["--hub", "http://nuc.local:7781/", "--display", "Work"])
+        self.assertTrue(a.no_edged)
+        self.assertEqual(ve.virtual_url(ve.hub_base(a), a.display), "http://nuc.local:7781/virtual?display=work")
+
+    def test_hub_display_defaults_to_hostname(self):
+        a = ve.parse_args(["--hub", "http://10.0.0.2:7781"])
+        self.assertRegex(a.display, r"^[a-z0-9_-]{1,32}$")
+        self.assertEqual(a.display, ve.default_display())
+
+    def test_rejects(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in (["--hub", "nuc.local:7781"], ["--display", "a b"], ["--display", "x" * 33]):
+                with self.assertRaises(SystemExit, msg=argv):
+                    ve.parse_args(argv)
+
+    def test_main_with_hub_starts_no_edged(self):
+        calls = []
+        with mock.patch.object(ve.subprocess, "Popen", side_effect=AssertionError("local edged started")), \
+                mock.patch.object(ve, "wait_health", lambda base: calls.append(base) or True), \
+                mock.patch.object(ve.os.path, "exists", lambda p: False), \
+                mock.patch.object(ve.subprocess, "call", lambda args: calls.append(args)):
+            self.assertEqual(ve.main(["--hub", "http://nuc.local:7781", "--display", "work"]), 0)
+        self.assertEqual(calls, ["http://nuc.local:7781", ["open", "http://nuc.local:7781/virtual?display=work"]])
 
 
 class ChromeArgsTest(unittest.TestCase):
