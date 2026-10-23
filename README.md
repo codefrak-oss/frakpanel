@@ -49,7 +49,7 @@ Not affiliated with or endorsed by Corsair. "Xeneon" is their trademark.
 | `edge-shot.ps1`, `edge-shot.sh` | panel host | Screenshot the panel, for checking it over ssh. |
 | `examples/demo_tile.py` | laptop | A complete working tile: a page, an SSE stream, and a timed tap round trip. |
 | `examples/self_hosted_tile.py` | laptop or host | A tile that polls a self-hosted HTTP API server-side and renders its data. |
-| `examples/uebersicht/` | Mac | Optional [Übersicht](https://tracesof.net/uebersicht/) widget that previews a tile at slot size on the desktop. |
+| `examples/uebersicht/` | Mac | Optional [Übersicht](https://tracesof.net/uebersicht/) widgets: `edge-tile-preview.jsx` previews a tile at slot size on the desktop; `frakpanel-tiles.jsx` shows 1-4 tiles from a hub, picked and sized from a ⚙ panel. |
 | [`TILES.md`](TILES.md) | | **How to build a tile.** Written so it can be handed, with `edgerelay.py` and `demo_tile.py`, to someone (or a coding agent) on another machine. |
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | | What the Edge is on the wire, panel settings over DDC, and why the panel isn't plugged into a Mac. |
 

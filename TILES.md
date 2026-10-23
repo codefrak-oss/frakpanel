@@ -187,6 +187,11 @@ panel is the target that counts.
 - **Shrinking an iframe preview with `transform: scale()` silently swallows
   every click** into the framed tile in WebKit. CSS `zoom` on the container
   passes clicks through. That is why the Übersicht widget uses `zoom`.
+- **`zoom` on an iframe applies twice in WebKit**: the framed page lays out
+  at width x zoom and is then drawn at zoom again, so a page sized by `%`,
+  flex or `vw` fills only zoom x zoom of the frame. `frakpanel-tiles.jsx`
+  makes the iframe W/zoom x H/zoom so the page lays out at 812x720, and
+  clips it to the slot box. (`vw`/`vh` then see the larger frame.)
 - **Übersicht doesn't notice a newly symlinked widget** until Übersicht
   itself is restarted. `pkill -x Übersicht` matches nothing (the "Ü" in its
   process name); use its menu bar item or kill the PID from
