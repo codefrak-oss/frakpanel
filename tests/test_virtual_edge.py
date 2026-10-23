@@ -101,3 +101,18 @@ class VirtualPageTest(unittest.TestCase):
         self.assertIn("overflow:hidden", body)
         self.assertIn("Math.min(W / 2560, H / 720)", body)
         self.assertIn("addEventListener('resize', fit)", body)
+        self.assertIn("cursor:auto!important", body)
+        self.assertIn("addEventListener('load'", body)
+
+    def test_shell_still_hides_cursor(self):
+        srv = edged.Server(("127.0.0.1", 0), edged.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+        c.request("GET", "/")
+        r = c.getresponse()
+        body = r.read().decode()
+        self.assertEqual(r.status, 200)
+        self.assertIn("cursor:none", body)
+        self.assertNotIn("cursor:auto", body)
