@@ -23,7 +23,8 @@ let W: CGFloat = 812, H: CGFloat = 720  // one Edge slot
 let SIZES: [(String, CGFloat)] = [("xs", 0.3), ("s", 0.4), ("m", 0.5), ("l", 0.6), ("xl", 0.8)]
 let MAX_TILES = 4
 let GAP: CGFloat = 10, MARGIN: CGFloat = 24
-let defaults = UserDefaults(suiteName: "net.codefrak.frakpanel.desk-tiles")!
+// the app bundle's own domain refuses a suite of its own name, so fall back to it
+let defaults = UserDefaults(suiteName: "net.codefrak.frakpanel.desk-tiles") ?? .standard
 
 struct Tile { let url: String; let title: String; let online: Bool }
 
