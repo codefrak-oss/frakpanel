@@ -387,6 +387,14 @@ function fit() {
 }
 addEventListener('resize', fit);
 fit();
+// the shell hides the cursor for the touch-only kiosk; restore it here so the
+// virtual window still shows a mouse pointer
+f.addEventListener('load', function() {
+  const doc = f.contentDocument;
+  const style = doc.createElement('style');
+  style.textContent = 'html,body{cursor:auto!important}';
+  doc.head.appendChild(style);
+});
 </script>
 """
 
