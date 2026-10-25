@@ -338,3 +338,17 @@ tried. Macs work fine as laptops serving tiles.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## HITLP permission popups
+
+Set `EDGED_HITLP_URL` (the HITLP server's base URL) and `EDGED_HITLP_TOKEN` (a HITLP surface
+credential) in edged's environment. edged then holds one outbound SSE connection to HITLP's
+`GET /events`. For each new task it reads `GET /tasks/{id}` once, and it drops the task on a
+decided, cancelled or expired event. If the stream drops, edged reconnects with backoff and resyncs once
+with `GET /tasks`. Nothing polls.
+
+The shell page subscribes to edged's own `GET /hitlp/events` (SSE, on port 7781). It draws a popup
+above all three slots, 80vw × 85vh, with the request's title, action or question. The popup closes
+when HITLP reports the task closed, or when **dismiss** is tapped (`POST /hitlp/dismiss {"id"}`,
+held in edged's memory). The popup only informs: answer the request on HITLP's own surfaces. The slot
+iframes are never touched. With neither variable set, nothing changes. No new port is opened.

@@ -404,3 +404,8 @@ follow:
 4. Two launchd agents (above). Confirm it survives a laptop sleep/wake.
 5. Keep the tile with the kit, and tell whoever runs the panel the relay
    name and title.
+
+## Overlays are the shell's
+
+Nothing a tile draws can cover another slot. The HITLP permission popup (README, "HITLP
+permission popups") is drawn by edged's shell page above the slots, never by a tile.
