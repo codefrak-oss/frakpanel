@@ -120,6 +120,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 
 import edgerelay
 import mcp_tiles
@@ -211,11 +212,18 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 #down{color:#e07b6f}
 #confirm .dur{display:block;margin:14px auto 0;padding:14px 20px}
 #confirm .dur.sel{background:#2f4f8f}
+#hitlp{position:fixed;left:10vw;top:7.5vh;width:80vw;height:85vh;z-index:10;box-sizing:border-box;background:#171b24;border:6px solid #f5a623;border-radius:24px;box-shadow:0 0 0 100vmax rgba(0,0,0,.6);display:flex;flex-direction:column;justify-content:center;gap:3vh;padding:4vh 4vw;color:#e6e6e6}
+#hitlp[hidden]{display:none}
+#hitlp h1{margin:0;font-size:5vh;font-weight:500;color:#f5a623}
+#hitlp #hitlpt{font-size:7vh;line-height:1.15;overflow:hidden;overflow-wrap:break-word}
+#hitlp #hitlpm{font-size:3vh;color:#8a8f98}
+#hitlp #hitlpx{align-self:flex-start;padding:2vh 4vw;border-radius:14px;background:#2a3140;font-size:3.5vh;touch-action:manipulation}
 </style>
 <div id="wrap">
   <div id="row"></div>
   <div id="pick" hidden></div>
   <div id="confirm" hidden><div><p id="confirmq"></p><span id="yes">yes</span><span id="no">no</span></div></div>
+  <div id="hitlp" hidden><h1>Permission request</h1><div id="hitlpt"></div><div id="hitlpm"></div><div id="hitlpx">dismiss</div></div>
   <div id="col">
     <div class="time" id="t"></div>
     <div style="font-size:13px" id="laptops"><span class="dot"></span><span>0 laptops</span></div>
@@ -380,6 +388,21 @@ function tick(){ $('t').textContent = new Date().toLocaleTimeString([], {hour: '
 tick(); setInterval(tick, 5000); setInterval(drawPin, 1000);
 poll(); setInterval(poll, 2000);
 document.addEventListener('contextmenu', e => e.preventDefault());  // long-press menu
+// HITLP permission requests: edged pushes show/hide over SSE; EventSource reconnects by itself, no timer.
+// The overlay is a sibling of the slot iframes, which it never touches.
+if (!DISPLAY) {
+  let hitlpId = null;
+  const hitlp = new EventSource('/hitlp/events');
+  hitlp.addEventListener('show', e => {
+    const tasks = JSON.parse(e.data).tasks, t = tasks[0];
+    hitlpId = t.id;
+    $('hitlpt').textContent = t.summary;
+    $('hitlpm').textContent = (t.detail || '') + (tasks.length > 1 ? ' \u00b7 +' + (tasks.length - 1) + ' more pending' : '');
+    $('hitlp').hidden = false;
+  });
+  hitlp.addEventListener('hide', () => { hitlpId = null; $('hitlp').hidden = true; });
+  $('hitlpx').addEventListener('pointerdown', () => { if (hitlpId) post('/hitlp/dismiss', {id: hitlpId}); });
+}
 </script>""".replace("__REPIN_SECONDS__", str(REPIN_SECONDS))
 
 VIRTUAL_PAGE = """<!doctype html><meta charset="utf-8"><title>frakpanel virtual Edge</title>
@@ -517,6 +540,137 @@ class Layout:
             return [DEFAULT_DISPLAY] + sorted(d for d in self.layouts if d != DEFAULT_DISPLAY)
 
 
+HITLP_DONE = ("closed", "decided", "cancelled", "canceled", "expired", "withdrawn", "answered", "resolved")
+
+
+class Hitlp:
+    """Open HITLP permission requests, for the shell's overlay (GET /hitlp/events).
+
+    listen() holds one outbound SSE stream to HITLP's GET /events (EDGED_HITLP_URL,
+    with EDGED_HITLP_TOKEN as bearer) and blocks on it: no timer. A new task is read
+    once with GET /tasks/{id}; a closed/decided/expired event drops it. After the
+    stream drops it reconnects with backoff and resyncs once with GET /tasks.
+    """
+
+    def __init__(self, url: str = "", token: str = "", logf=None):
+        self.url, self.token, self.log = url.rstrip("/"), token, logf or (lambda m: None)
+        self.tasks: dict[str, dict] = {}  # id -> {"id", "summary", "detail"}, oldest first
+        self.dismissed: set[str] = set()
+        self.version = 0
+        self.cond = threading.Condition()
+
+    def visible(self) -> list[dict]:  # caller holds self.cond
+        return [t for i, t in self.tasks.items() if i not in self.dismissed]
+
+    def changed(self) -> None:  # caller holds self.cond
+        self.version += 1
+        self.cond.notify_all()
+
+    def add(self, task: dict) -> None:
+        with self.cond:
+            self.tasks[task["id"]] = task
+            self.changed()
+
+    def remove(self, tid: str) -> None:
+        with self.cond:
+            if self.tasks.pop(tid, None) is not None or tid in self.dismissed:
+                self.dismissed.discard(tid)
+                self.changed()
+
+    def dismiss(self, tid: str) -> bool:
+        with self.cond:
+            if tid not in self.tasks:
+                return False
+            self.dismissed.add(tid)
+            self.changed()
+            return True
+
+    def replace(self, tasks: list[dict]) -> None:
+        with self.cond:
+            self.tasks = {t["id"]: t for t in tasks}
+            self.dismissed &= set(self.tasks)
+            self.changed()
+
+    def wait(self, version: int, timeout: float) -> tuple[int, list[dict]]:
+        with self.cond:
+            self.cond.wait_for(lambda: self.version != version, timeout)
+            return self.version, self.visible()
+
+    @staticmethod
+    def view(obj: dict, tid: str = "") -> dict | None:
+        obj = obj.get("task", obj) if isinstance(obj, dict) else {}
+        tid = str(obj.get("id") or obj.get("taskId") or tid)
+        if not tid:
+            return None
+        summary = next((str(obj[k]) for k in ("title", "summary", "action", "question") if obj.get(k)), "")
+        detail = " \u00b7 ".join(str(obj[k]) for k in ("requester", "why", "reason", "deadline") if obj.get(k))
+        return {"id": tid, "summary": summary or f"task {tid}", "detail": detail}
+
+    def get(self, path: str):
+        req = urllib.request.Request(self.url + path, headers={"Authorization": f"Bearer {self.token}",
+                                                               "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read() or b"null")
+
+    def on_event(self, name: str, data: str) -> None:
+        try:
+            obj = json.loads(data) if data else {}
+        except ValueError:
+            obj = {}
+        if not isinstance(obj, dict):
+            obj = {}
+        kind = (name or str(obj.get("type") or obj.get("event") or "")).lower()
+        status = str(obj.get("status") or obj.get("state") or "").lower()
+        tid = str(obj.get("id") or obj.get("taskId") or (obj.get("task") or {}).get("id") or "")
+        if not tid:
+            return
+        if any(w in kind or w == status for w in HITLP_DONE):
+            self.remove(tid)
+        else:
+            try:
+                task = self.view(self.get(f"/tasks/{urllib.parse.quote(tid)}"), tid)
+            except (OSError, ValueError) as exc:
+                self.log(f"hitlp: GET /tasks/{tid} failed: {exc!r}")
+                task = self.view(obj, tid)
+            if task:
+                self.add(task)
+
+    def resync(self) -> None:
+        obj = self.get("/tasks")
+        items = obj.get("tasks", obj.get("items", [])) if isinstance(obj, dict) else obj or []
+        self.replace([t for t in (self.view(o) for o in items if isinstance(o, dict)
+                                  and str(o.get("status") or "pending").lower() not in HITLP_DONE) if t])
+
+    def stream(self) -> None:
+        req = urllib.request.Request(self.url + "/events", headers={"Authorization": f"Bearer {self.token}",
+                                                                    "Accept": "text/event-stream"})
+        with urllib.request.urlopen(req, timeout=300) as r:  # HITLP's keep-alives refresh the read timeout
+            name, data = "", []
+            for raw in r:
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if not line:
+                    if data or name:
+                        self.on_event(name, "\n".join(data))
+                    name, data = "", []
+                elif line.startswith("event:"):
+                    name = line[6:].strip()
+                elif line.startswith("data:"):
+                    data.append(line[5:].lstrip())
+
+    def listen(self) -> None:
+        backoff = 1.0
+        while True:
+            try:
+                self.resync()
+                self.log(f"hitlp: listening on {self.url}/events")
+                self.stream()
+                backoff = 1.0
+            except Exception as exc:  # noqa: BLE001 - keep the listener alive
+                self.log(f"hitlp: stream dropped: {exc!r}")
+            time.sleep(backoff)  # reconnect backoff after a dropped stream, not polling
+            backoff = min(backoff * 2, 60.0)
+
+
 def load_local_tiles() -> list[dict]:
     """The picker's fixed entries: the clock, then local_tiles.json if it exists.
 
@@ -540,6 +694,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     mcp: mcp_tiles.McpServer
     relay: edgerelay.RelayServer
     updater: updater.Updater
+    hitlp: Hitlp = Hitlp()  # main() replaces it; with no EDGED_HITLP_URL it never shows anything
 
     @classmethod
     def picker_tiles(cls) -> list[dict]:
@@ -624,6 +779,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.json(200, {"displays": {d: self.layout.get(d) for d in self.layout.displays()}})
         elif path == "/version":
             self.json(200, self.updater.status())
+        elif path == "/hitlp/events":
+            self.hitlp_events()
         elif path == "/mcp":  # stateless Streamable HTTP: no server-initiated SSE stream
             self.send_response(405)
             self.send_header("Allow", "POST")
@@ -631,6 +788,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
         else:
             self.json(404, {"error": "not found"})
+
+    def hitlp_events(self) -> None:
+        """SSE to the shell: `show` {tasks} on connect and on every change, `hide` when none is left."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        version, last = -1, None
+        try:
+            while True:
+                version, tasks = self.hitlp.wait(version, 25.0)
+                msg = f"event: show\ndata: {json.dumps({'tasks': tasks})}\n\n" if tasks else "event: hide\ndata: {}\n\n"
+                self.wfile.write((msg if msg != last else ": keep-alive\n\n").encode())
+                self.wfile.flush()
+                last = msg
+        except OSError:
+            pass
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -687,6 +861,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 slots = self.layout.set(body, display) if path == "/layout" else self.layout.set_slot(body, display)
                 log(f"{path[1:]} {display} from {who}: {[u or '/home' for u in slots]}")
                 self.json(200, {"slots": slots, "display": display})
+            elif path == "/hitlp/dismiss":
+                tid = self.body().get("id")
+                if not isinstance(tid, str):
+                    raise ValueError("id must be a string")
+                if not self.hitlp.dismiss(tid):
+                    self.json(404, {"error": "no open request"})
+                else:
+                    log(f"hitlp dismiss from {who}: {tid}")
+                    self.json(200, {"dismissed": tid})
             elif path == "/tiles/delete":
                 url = self.body().get("url")
                 if not isinstance(url, str):
@@ -884,6 +1067,9 @@ def main() -> int:
     Handler.mcp = mcp_tiles.McpServer(mcp_tiles.TileRegistry(MCP_TILES_PATH, log), VERSION, log,
                                          Handler.layout, kiosk_platform.screenshot, Handler.picker_tiles)
     Handler.relay = edgerelay.RelayServer(log)
+    Handler.hitlp = Hitlp(os.environ.get("EDGED_HITLP_URL", ""), os.environ.get("EDGED_HITLP_TOKEN", ""), log)
+    if Handler.hitlp.url and Handler.hitlp.token:
+        threading.Thread(target=Handler.hitlp.listen, daemon=True).start()
     threading.Thread(target=Handler.relay.serve, daemon=True).start()
     with Server((HOST, PORT), Handler) as srv:
         log(f"frakpanel {VERSION} listening on {HOST}:{PORT}, shell {SHELL_HASH}, slots {Handler.layout.get()}")
