@@ -399,9 +399,9 @@ tick(); setInterval(tick, 5000); setInterval(drawPin, 1000);
 poll(); setInterval(poll, 2000);
 document.addEventListener('contextmenu', e => e.preventDefault());  // long-press menu
 // HITLP permission requests: edged pushes show/hide over SSE; EventSource reconnects by itself, no timer.
-// The overlay is a sibling of the slot iframes, which it never touches. The panel and a
-// virtual Edge on the panel's display (display=panel) show it; other virtual displays don't.
-if (!DISPLAY || DISPLAY === 'panel') {
+// The overlay is a sibling of the slot iframes, which it never touches. Every display shows it:
+// the panel and each virtual Edge share one edged, so a decision on any of them closes it on all.
+{
   let hitlpId = null;
   const hitlp = new EventSource('/hitlp/events');
   hitlp.addEventListener('show', e => {
