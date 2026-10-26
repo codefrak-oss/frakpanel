@@ -187,7 +187,7 @@ class HitlpTest(unittest.TestCase):
     def test_shell_page(self):
         page = edged.SHELL_PAGE
         self.assertIn("new EventSource('/hitlp/events')", page)
-        self.assertIn("if (!DISPLAY || DISPLAY === 'panel')", page)  # a virtual Edge on the panel display shows it too
+        self.assertNotIn("DISPLAY === 'panel'", page)  # every display shows it, not only the panel
         css = re.search(r"#hitlp\{[^}]*\}", page).group(0)
         w = int(re.search(r"width:(\d+)vw", css).group(1))
         h = int(re.search(r"height:(\d+)vh", css).group(1))
