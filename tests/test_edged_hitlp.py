@@ -172,6 +172,18 @@ class HitlpTest(unittest.TestCase):
         self.assertEqual(tasks, [])
         self.assertLess(time.time() - start, 2)
 
+    def test_hitlp_statuses_end_a_task(self):
+        store = edged.Hitlp()
+        for status in ("completed", "failed", "cancelled"):
+            store.add(edged.Hitlp.view(TASK))
+            store.on_event("task", json.dumps({"id": "t1", "status": status}))
+            self.assertEqual(store.tasks, {}, status)
+
+    def test_detail_reads_attested_and_asserted(self):
+        v = edged.Hitlp.view({"id": "x", "question": "q?", "attested": {"requester": "frakworks-engine"},
+                              "asserted": {"why": "a Smith needs it"}})
+        self.assertEqual(v["detail"], "frakworks-engine \u00b7 a Smith needs it")
+
     def test_shell_page(self):
         page = edged.SHELL_PAGE
         self.assertIn("new EventSource('/hitlp/events')", page)

@@ -217,7 +217,10 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 #hitlp{position:fixed;left:10vw;top:7.5vh;width:80vw;height:85vh;z-index:10;box-sizing:border-box;background:#171b24;border:6px solid #f5a623;border-radius:24px;box-shadow:0 0 0 100vmax rgba(0,0,0,.6);display:flex;flex-direction:column;justify-content:center;gap:3vh;padding:4vh 4vw;color:#e6e6e6}
 #hitlp[hidden]{display:none}
 #hitlp h1{margin:0;font-size:5vh;font-weight:500;color:#f5a623}
-#hitlp #hitlpt{font-size:7vh;line-height:1.15;overflow:hidden;overflow-wrap:break-word}
+#hitlp #hitlpt{flex:0 1 auto;min-height:0;font-size:7vh;line-height:1.15;overflow-y:auto;overflow-wrap:break-word;touch-action:pan-y;scrollbar-width:none;overscroll-behavior:contain}
+#hitlp #hitlpt.long{font-size:4.5vh}
+#hitlp #hitlpt.longer{font-size:3.5vh}
+#hitlp #hitlpt.more{-webkit-mask-image:linear-gradient(#000 80%,transparent);mask-image:linear-gradient(#000 80%,transparent)}
 #hitlp #hitlpm{font-size:3vh;color:#8a8f98}
 #hitlp #hitlpa{display:flex;flex-wrap:wrap;gap:2vh 2vw}
 #hitlp #hitlpa span,#hitlp #hitlpa button{padding:2vh 4vw;border-radius:14px;background:#2f4f8f;color:#e6e6e6;font-size:3.5vh;border:0;touch-action:manipulation}
@@ -405,13 +408,20 @@ if (!DISPLAY || DISPLAY === 'panel') {
     const tasks = JSON.parse(e.data).tasks, t = tasks[0];
     const fresh = hitlpId !== t.id;
     hitlpId = t.id;
-    $('hitlpt').textContent = t.summary;
+    const q = $('hitlpt');
+    q.textContent = t.summary;
+    q.className = t.summary.length > 400 ? 'longer' : t.summary.length > 160 ? 'long' : '';
+    if (fresh) q.scrollTop = 0;
+    fade();
     const due = t.deadline && new Date(t.deadline);
     const until = due && !isNaN(due) ? 'answer by ' + due.toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'}) : '';
     $('hitlpm').textContent = [t.detail, until, tasks.length > 1 ? '+' + (tasks.length - 1) + ' more pending' : ''].filter(Boolean).join(' \u00b7 ');
     if (fresh) { $('hitlpe').textContent = ''; answers(t); }
     $('hitlp').hidden = false;
   });
+  // Fade the question's bottom edge while there is more of it below.
+  function fade(){ const q = $('hitlpt'); q.classList.toggle('more', q.scrollTop + q.clientHeight < q.scrollHeight - 2); }
+  $('hitlpt').addEventListener('scroll', fade);
   // The page sends only the choice; edged adds the surface credential and HITLP's payloadDigest.
   // A decision closes the popup through the stream's hide, like any other surface's.
   async function answer(id, choice){
@@ -579,7 +589,10 @@ class Layout:
             return [DEFAULT_DISPLAY] + sorted(d for d in self.layouts if d != DEFAULT_DISPLAY)
 
 
-HITLP_DONE = ("closed", "decided", "cancelled", "canceled", "expired", "withdrawn", "answered", "resolved")
+# HITLP's terminal statuses are completed, failed and cancelled (a deadline ends a task as one of
+# the first two); the rest are kept for other servers' wording.
+HITLP_DONE = ("completed", "failed", "cancelled", "canceled", "closed", "decided", "expired", "withdrawn",
+              "answered", "resolved")
 
 
 class Hitlp:
@@ -657,7 +670,11 @@ class Hitlp:
         if not tid:
             return None
         summary = next((str(obj[k]) for k in ("title", "summary", "action", "question") if obj.get(k)), "")
-        detail = " \u00b7 ".join(str(obj[k]) for k in ("requester", "why", "reason") if obj.get(k))
+        # HITLP nests these: attested.requester (the server vouches for it), asserted.why (the requester's word).
+        att = obj.get("attested") if isinstance(obj.get("attested"), dict) else {}
+        asr = obj.get("asserted") if isinstance(obj.get("asserted"), dict) else {}
+        found = (obj.get("requester") or att.get("requester"), obj.get("why") or asr.get("why"), obj.get("reason"))
+        detail = " \u00b7 ".join(str(v) for v in found if v)
         primitive = str(obj.get("primitive") or "").lower()
         options = [{"value": str(o["value"]), "label": str(o.get("label") or o["value"])}
                    for o in obj.get("options") or [] if isinstance(o, dict) and "value" in o]
