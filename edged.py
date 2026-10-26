@@ -119,6 +119,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -217,13 +218,18 @@ iframe+iframe{border-left:2px solid #1a1a1a}
 #hitlp h1{margin:0;font-size:5vh;font-weight:500;color:#f5a623}
 #hitlp #hitlpt{font-size:7vh;line-height:1.15;overflow:hidden;overflow-wrap:break-word}
 #hitlp #hitlpm{font-size:3vh;color:#8a8f98}
+#hitlp #hitlpa{display:flex;flex-wrap:wrap;gap:2vh 2vw}
+#hitlp #hitlpa span,#hitlp #hitlpa button{padding:2vh 4vw;border-radius:14px;background:#2f4f8f;color:#e6e6e6;font-size:3.5vh;border:0;touch-action:manipulation}
+#hitlp #hitlpa .no{background:#c0392b}
+#hitlp #hitlpa input{flex:1;min-width:30vw;padding:2vh 2vw;border-radius:14px;border:2px solid #2a3140;background:#0f1218;color:#e6e6e6;font-size:3.5vh}
+#hitlp #hitlpe{font-size:3vh;color:#e07b6f}
 #hitlp #hitlpx{align-self:flex-start;padding:2vh 4vw;border-radius:14px;background:#2a3140;font-size:3.5vh;touch-action:manipulation}
 </style>
 <div id="wrap">
   <div id="row"></div>
   <div id="pick" hidden></div>
   <div id="confirm" hidden><div><p id="confirmq"></p><span id="yes">yes</span><span id="no">no</span></div></div>
-  <div id="hitlp" hidden><h1>Permission request</h1><div id="hitlpt"></div><div id="hitlpm"></div><div id="hitlpx">dismiss</div></div>
+  <div id="hitlp" hidden><h1>Permission request</h1><div id="hitlpt"></div><div id="hitlpm"></div><div id="hitlpa"></div><div id="hitlpe"></div><div id="hitlpx">dismiss</div></div>
   <div id="col">
     <div class="time" id="t"></div>
     <div style="font-size:13px" id="laptops"><span class="dot"></span><span>0 laptops</span></div>
@@ -396,11 +402,42 @@ if (!DISPLAY || DISPLAY === 'panel') {
   const hitlp = new EventSource('/hitlp/events');
   hitlp.addEventListener('show', e => {
     const tasks = JSON.parse(e.data).tasks, t = tasks[0];
+    const fresh = hitlpId !== t.id;
     hitlpId = t.id;
     $('hitlpt').textContent = t.summary;
-    $('hitlpm').textContent = (t.detail || '') + (tasks.length > 1 ? ' \u00b7 +' + (tasks.length - 1) + ' more pending' : '');
+    const due = t.deadline && new Date(t.deadline);
+    const until = due && !isNaN(due) ? 'answer by ' + due.toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'}) : '';
+    $('hitlpm').textContent = [t.detail, until, tasks.length > 1 ? '+' + (tasks.length - 1) + ' more pending' : ''].filter(Boolean).join(' \u00b7 ');
+    if (fresh) { $('hitlpe').textContent = ''; answers(t); }
     $('hitlp').hidden = false;
   });
+  // The page sends only the choice; edged adds the surface credential and HITLP's payloadDigest.
+  // A decision closes the popup through the stream's hide, like any other surface's.
+  async function answer(id, choice){
+    $('hitlpe').textContent = 'sending\u2026';
+    try {
+      const r = await fetch('/hitlp/answer' + Q, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(Object.assign({id}, choice))});
+      const j = await r.json().catch(() => ({}));
+      if (id === hitlpId) $('hitlpe').textContent = r.ok ? '' : 'not sent: ' + (j.error || r.status);
+    } catch (e) { if (id === hitlpId) $('hitlpe').textContent = 'not sent: edged unreachable'; }
+  }
+  function btn(label, cls, choice, id){
+    const b = document.createElement('span');
+    b.textContent = label; if (cls) b.className = cls;
+    b.addEventListener('pointerdown', () => answer(id, choice()));
+    return b;
+  }
+  function answers(t){
+    const a = $('hitlpa'); a.replaceChildren();
+    if (t.primitive === 'approve') {
+      a.append(btn('approve', '', () => ({outcome: 'approve'}), t.id), btn('reject', 'no', () => ({outcome: 'reject'}), t.id));
+    } else if (t.primitive === 'ask' && t.options.length) {
+      t.options.forEach(o => a.append(btn(o.label, '', () => ({answer: o.value}), t.id)));
+    } else if (t.primitive === 'ask') {
+      const f = document.createElement('input'); f.placeholder = 'your answer';
+      a.append(f, btn('send', '', () => ({answer: f.value}), t.id));
+    }
+  }
   hitlp.addEventListener('hide', () => { hitlpId = null; $('hitlp').hidden = true; });
   $('hitlpx').addEventListener('pointerdown', () => { if (hitlpId) post('/hitlp/dismiss', {id: hitlpId}); });
 }
@@ -604,8 +641,51 @@ class Hitlp:
         if not tid:
             return None
         summary = next((str(obj[k]) for k in ("title", "summary", "action", "question") if obj.get(k)), "")
-        detail = " \u00b7 ".join(str(obj[k]) for k in ("requester", "why", "reason", "deadline") if obj.get(k))
-        return {"id": tid, "summary": summary or f"task {tid}", "detail": detail}
+        detail = " \u00b7 ".join(str(obj[k]) for k in ("requester", "why", "reason") if obj.get(k))
+        primitive = str(obj.get("primitive") or "").lower()
+        options = [{"value": str(o["value"]), "label": str(o.get("label") or o["value"])}
+                   for o in obj.get("options") or [] if isinstance(o, dict) and "value" in o]
+        view = {"id": tid, "summary": summary or f"task {tid}", "detail": detail,
+                "primitive": primitive if primitive in ("ask", "approve") else "", "options": options,
+                "deadline": str(obj.get("deadline") or "")}  # ISO; the page shows it in local time
+        if obj.get("payloadDigest"):
+            view["payloadDigest"] = str(obj["payloadDigest"])
+        return view
+
+    def decide(self, tid: str, choice: dict) -> tuple[int, dict]:
+        """POST /tasks/{id}/decision for an open task: {"answer"} for an Ask, {"outcome"} for an Approve."""
+        with self.cond:
+            task = self.tasks.get(tid)
+        if task is None:
+            return 404, {"error": "no open request"}
+        if task["primitive"] == "approve":
+            if choice.get("outcome") not in ("approve", "reject"):
+                raise ValueError("outcome must be approve or reject")
+            body = {"outcome": choice["outcome"]}
+            if task.get("payloadDigest"):
+                body["payloadDigest"] = task["payloadDigest"]  # HITLP refuses (409) if the payload changed
+        elif task["primitive"] == "ask":
+            if not isinstance(choice.get("answer"), str):
+                raise ValueError("answer must be a string")
+            body = {"answer": choice["answer"]}
+        else:
+            return 409, {"error": "unknown request type"}
+        req = urllib.request.Request(f"{self.url}/tasks/{urllib.parse.quote(tid)}/decision", json.dumps(body).encode(),
+                                     {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
+                                      "Accept": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return 200, json.loads(r.read() or b"null") or {}
+        except urllib.error.HTTPError as exc:
+            try:
+                err = str(json.loads(exc.read() or b"{}").get("error") or exc.reason)
+            except (ValueError, AttributeError):
+                err = str(exc.reason)
+            self.log(f"hitlp: decision on {tid} refused: {exc.code} {err}")
+            return 502, {"error": f"HITLP {exc.code}: {err}"}
+        except (OSError, ValueError) as exc:
+            self.log(f"hitlp: decision on {tid} failed: {exc!r}")
+            return 502, {"error": f"HITLP unreachable: {exc}"}
 
     def get(self, path: str):
         req = urllib.request.Request(self.url + path, headers={"Authorization": f"Bearer {self.token}",
@@ -871,6 +951,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     log(f"hitlp dismiss from {who}: {tid}")
                     self.json(200, {"dismissed": tid})
+            elif path == "/hitlp/answer":
+                body = self.body()
+                tid = body.get("id")
+                if not isinstance(tid, str):
+                    raise ValueError("id must be a string")
+                code, res = self.hitlp.decide(tid, body)
+                log(f"hitlp answer from {who}: {tid} -> {code}" + (f" {res['error']}" if code != 200 else ""))
+                self.json(code, {"decided": tid} if code == 200 else res)
             elif path == "/tiles/delete":
                 url = self.body().get("url")
                 if not isinstance(url, str):
