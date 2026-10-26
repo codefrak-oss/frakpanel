@@ -14,7 +14,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("FRAKPANEL_DATA", tempfile.mkdtemp())
 import edged  # noqa: E402
 
-TASK = {"id": "t1", "kind": "action", "action": "deploy frakworks to production", "requester": "smith"}
+TASK = {"id": "t1", "primitive": "approve", "action": "deploy frakworks to production", "requester": "smith",
+        "deadline": "2026-10-26T03:00:00Z", "payloadDigest": "sha256:abc"}
+ASK = {"id": "t2", "primitive": "ask", "question": "which region?", "deadline": "2026-10-26T03:00:00Z",
+       "options": [{"value": "eu", "label": "Europe"}, {"value": "us", "label": "USA"}]}
 
 
 def serve(handler):
@@ -27,6 +30,9 @@ def serve(handler):
 class HitlpTest(unittest.TestCase):
     def setUp(self):
         events = self.events = queue.Queue()  # SSE frames the fake HITLP sends
+        decisions = self.decisions = []  # (path, body) the fake HITLP was POSTed
+        self.decision_status = 200
+        test = self
 
         class FakeHitlp(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -44,9 +50,19 @@ class HitlpTest(unittest.TestCase):
                             return
                         self.wfile.write(frame.encode())
                         self.wfile.flush()
-                body = {"tasks": []} if self.path == "/tasks" else TASK if self.path == "/tasks/t1" else None
+                body = {"tasks": []} if self.path == "/tasks" else {"/tasks/t1": TASK, "/tasks/t2": ASK}.get(self.path)
                 data = json.dumps(body).encode()
                 self.send_response(200 if body is not None else 404)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                assert self.headers["Authorization"] == "Bearer tok"
+                decisions.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+                code = test.decision_status
+                data = json.dumps({"taskId": "t1"} if code == 200 else {"error": "already decided"}).encode()
+                self.send_response(code)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -94,6 +110,44 @@ class HitlpTest(unittest.TestCase):
         self.events.put('event: task.decided\ndata: {"id": "t1", "status": "decided"}\n\n')
         self.assertEqual(ev()[0], "hide")
 
+    def post(self, path, body):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+        r = c.getresponse()
+        data = json.loads(r.read())
+        c.close()
+        return r.status, data
+
+    def test_payload_fields(self):
+        ev = self.shell_stream()
+        ev()
+        self.events.put('event: task.created\ndata: {"id": "t1"}\n\n')
+        t = ev()[1]["tasks"][0]
+        self.assertEqual((t["primitive"], t["options"], t["detail"]), ("approve", [], "smith"))  # no raw deadline in detail
+        self.assertEqual(t["deadline"], "2026-10-26T03:00:00Z")
+        self.events.put('event: task.created\ndata: {"id": "t2"}\n\n')
+        t = ev()[1]["tasks"][1]
+        self.assertEqual(t["primitive"], "ask")
+        self.assertEqual(t["options"], ASK["options"])
+
+    def test_answer_approve_and_ask(self):
+        ev = self.shell_stream()
+        ev()
+        self.events.put('event: task.created\ndata: {"id": "t1"}\n\n')
+        ev()
+        self.events.put('event: task.created\ndata: {"id": "t2"}\n\n')
+        ev()
+        self.assertEqual(self.post("/hitlp/answer", {"id": "t1", "outcome": "approve"}), (200, {"decided": "t1"}))
+        self.assertEqual(self.post("/hitlp/answer", {"id": "t2", "answer": "eu"})[0], 200)
+        self.assertEqual(self.decisions, [("/tasks/t1/decision", {"outcome": "approve", "payloadDigest": "sha256:abc"}),
+                                          ("/tasks/t2/decision", {"answer": "eu"})])
+        self.assertEqual(self.post("/hitlp/answer", {"id": "t1", "outcome": "maybe"})[0], 400)
+        self.assertEqual(self.post("/hitlp/answer", {"id": "nope", "outcome": "approve"})[0], 404)
+        self.decision_status = 409
+        code, data = self.post("/hitlp/answer", {"id": "t1", "outcome": "reject"})
+        self.assertEqual(code, 502)
+        self.assertIn("already decided", data["error"])
+
     def test_dismiss_hides(self):
         ev = self.shell_stream()
         ev()
@@ -116,6 +170,8 @@ class HitlpTest(unittest.TestCase):
         js = page[page.index("// HITLP permission"):page.index("</script>", page.index("// HITLP permission"))]
         self.assertNotIn("setInterval", js)
         self.assertNotIn("setTimeout", js)
+        self.assertIn("fetch('/hitlp/answer'", js)
+        self.assertNotIn("tok", js)
 
 
 if __name__ == "__main__":
