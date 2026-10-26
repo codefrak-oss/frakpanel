@@ -15,8 +15,8 @@ os.environ.setdefault("FRAKPANEL_DATA", tempfile.mkdtemp())
 import edged  # noqa: E402
 
 TASK = {"id": "t1", "primitive": "approve", "action": "deploy frakworks to production", "requester": "smith",
-        "deadline": "2026-10-26T03:00:00Z", "payloadDigest": "sha256:abc"}
-ASK = {"id": "t2", "primitive": "ask", "question": "which region?", "deadline": "2026-10-26T03:00:00Z",
+        "deadline": "2099-01-01T00:00:00Z", "payloadDigest": "sha256:abc"}
+ASK = {"id": "t2", "primitive": "ask", "question": "which region?", "deadline": "2099-01-01T00:00:00Z",
        "options": [{"value": "eu", "label": "Europe"}, {"value": "us", "label": "USA"}]}
 
 
@@ -124,7 +124,7 @@ class HitlpTest(unittest.TestCase):
         self.events.put('event: task.created\ndata: {"id": "t1"}\n\n')
         t = ev()[1]["tasks"][0]
         self.assertEqual((t["primitive"], t["options"], t["detail"]), ("approve", [], "smith"))  # no raw deadline in detail
-        self.assertEqual(t["deadline"], "2026-10-26T03:00:00Z")
+        self.assertEqual(t["deadline"], "2099-01-01T00:00:00Z")
         self.events.put('event: task.created\ndata: {"id": "t2"}\n\n')
         t = ev()[1]["tasks"][1]
         self.assertEqual(t["primitive"], "ask")
@@ -158,6 +158,19 @@ class HitlpTest(unittest.TestCase):
         self.assertEqual(c.getresponse().status, 200)
         c.close()
         self.assertEqual(ev()[0], "hide")
+
+    def test_expired_request_goes_away_on_its_own(self):
+        import time
+        from datetime import datetime, timezone
+        store = edged.Hitlp()
+        soon = datetime.fromtimestamp(time.time() + 0.5, timezone.utc).isoformat().replace("+00:00", "Z")
+        store.add(dict(TASK, deadline=soon))
+        version, tasks = store.wait(-1, 5)
+        self.assertEqual([t["id"] for t in tasks], ["t1"])
+        start = time.time()
+        _, tasks = store.wait(version, 5)  # no event from HITLP; the deadline alone wakes it
+        self.assertEqual(tasks, [])
+        self.assertLess(time.time() - start, 2)
 
     def test_shell_page(self):
         page = edged.SHELL_PAGE
