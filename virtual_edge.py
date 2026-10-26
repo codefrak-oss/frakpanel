@@ -13,6 +13,9 @@ window) stops the edged it started.
     python3 virtual_edge.py --no-edged          # attach to a running edged
     python3 virtual_edge.py --hub http://nuc.local:7781 --display work
                                                 # a remote hub; no local edged
+    python3 virtual_edge.py --launcher <root>/launcher.py
+                                                # edged through an install's launcher,
+                                                # so it self-updates (install-virtual-edge.sh)
 
 Each window shows the layout of its display id (--display, default this
 machine's hostname), kept by the hub's edged apart from the panel's and every
@@ -82,6 +85,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--size", type=parse_size, default=(1280, 360), help="starting window size, WxH")
     p.add_argument("--no-edged", action="store_true", help="attach to an edged that is already running")
     p.add_argument("--hub", help="a remote edged's base URL, e.g. http://nuc.local:7781; starts no local edged")
+    p.add_argument("--launcher", help="run the local edged through this installed launcher.py, which applies "
+                                      "updates and restarts edged into them (install-virtual-edge.sh)")
     p.add_argument("--display", type=parse_display,
                    help="this window's display id (its own layout); default: the hostname with --hub, "
                         "else the panel's layout")
@@ -92,6 +97,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         a.no_edged = True
         a.display = a.display or default_display()
     return a
+
+
+def edged_cmd(a: argparse.Namespace) -> list[str]:
+    if a.launcher:
+        return [sys.executable, a.launcher, "--no-browser"]
+    return [sys.executable, os.path.join(HERE, "edged.py"), "--no-browser"]
 
 
 def wait_health(base: str, timeout: float = 15.0) -> bool:
@@ -109,8 +120,7 @@ def main(argv: list[str]) -> int:
     a = parse_args(argv)
     base = hub_base(a)
     env = dict(os.environ, EDGED_PORT=str(a.port))
-    edged = None if a.no_edged else subprocess.Popen(
-        [sys.executable, os.path.join(HERE, "edged.py"), "--no-browser"], env=env)
+    edged = None if a.no_edged else subprocess.Popen(edged_cmd(a), env=env)
     try:
         if not wait_health(base):
             print(f"virtual_edge: edged not answering on {base}", file=sys.stderr)
@@ -130,7 +140,7 @@ def main(argv: list[str]) -> int:
         if edged:
             edged.terminate()
             try:
-                edged.wait(5)
+                edged.wait(15)  # a launcher gives its edged 10 s to stop
             except subprocess.TimeoutExpired:
                 edged.kill()
     return 0

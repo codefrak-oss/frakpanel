@@ -115,3 +115,12 @@ class VirtualPageTest(unittest.TestCase):
         self.assertIn("cursor:none", body)
         self.assertIn("html.cursor,html.cursor *{cursor:auto}", body)  # only with ?cursor=1
         self.assertIn("u.searchParams.set('cursor', '1')", body)
+
+
+class EdgedCmdTest(unittest.TestCase):
+    def test_launcher_runs_edged_through_it(self):
+        a = ve.parse_args(["--launcher", "/r/launcher.py"])
+        self.assertEqual(ve.edged_cmd(a)[1:], ["/r/launcher.py", "--no-browser"])
+
+    def test_default_runs_this_checkouts_edged(self):
+        self.assertEqual(ve.edged_cmd(ve.parse_args([]))[1:], [os.path.join(ve.HERE, "edged.py"), "--no-browser"])
