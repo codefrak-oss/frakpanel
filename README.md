@@ -71,6 +71,9 @@ open http://127.0.0.1:7781/                     # the shell, in a 2560x720 windo
 python3 virtual_edge.py                         # edged (no kiosk) + a resizable Edge window
 ```
 
+or, for an app in Spotlight and the Dock that keeps itself up to date,
+`sh install-virtual-edge.sh` (same arguments; "Releases and updates").
+
 It starts edged without the kiosk and opens a Google Chrome app window on
 `/virtual`: the 2560x720 shell scaled to fit, keeping its aspect, so resize
 the window freely. Mouse clicks and drags act as touches (taps, the picker's
@@ -257,6 +260,20 @@ built by `.github/workflows/release.yml`:
 - **stable**: pushing the tag `v<VERSION>` publishes that version. Bump
   `VERSION` straight after; until then, betas fail on purpose.
 
+**Promoting a beta to stable.** A stable release is rebuilt from the tagged
+commit, so tag the commit of a beta that has already run well (on the
+beta-channel panel, say a day of normal use with no rollback in
+`launcher.log`):
+
+```
+git tag v0.1.0 <commit of the good beta>   # VERSION must read 0.1.0
+git push origin v0.1.0                     # CI publishes frakpanel 0.1.0
+echo 0.2.0 > VERSION                       # next planned stable; commit and push
+```
+
+Until that `VERSION` bump lands, pushes to `main` fail the release job on
+purpose. Stable-channel installs pick the new release up within the hour.
+
 An installed copy updates itself only if you opt in. Create `update.json` in
 the data folder:
 
@@ -275,6 +292,14 @@ first two minutes, the launcher rolls back to the previous one and the updater
 skips that release. `curl http://<panel-host>:7781/version` shows the running
 version, the channel, and the last check. The kiosk browser is untouched by
 an update.
+
+**The virtual Edge app** (`install-virtual-edge.sh`, macOS) installs the
+newest release on its channel (`--channel beta`, the default, or `stable`)
+into `~/Library/Application Support/frakpanel-virtual` and checks for a newer
+one at every launch. Without `--hub` it runs its edged through `launcher.py`,
+so it also updates while open, like a panel; with `--hub` the page comes from
+the hub's edged anyway. `--dev` builds the app around your checkout instead,
+which never updates.
 
 On Windows every version runs on the install's one `runtime\pythonw.exe`, so
 the firewall rule never changes. That also means an update never changes

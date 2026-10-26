@@ -74,6 +74,18 @@ def version_key(v: str) -> tuple | None:
     return (int(major), int(minor), int(patch), 1 if beta is None else 0, int(beta or 0))
 
 
+def newest(releases: list, channel: str) -> tuple[dict | None, tuple | None]:
+    """The highest release on this channel: stable only, or stable and beta."""
+    best, best_key = None, None
+    for rel in releases:
+        if rel.get("draft") or (rel.get("prerelease") and channel != "beta"):
+            continue
+        key = version_key(rel.get("tag_name", ""))
+        if key and (best_key is None or key > best_key):
+            best, best_key = rel, key
+    return best, best_key
+
+
 def asset_name(version: str) -> str:
     return f"frakpanel-{version}-windows-x64.zip" if sys.platform == "win32" else f"frakpanel-{version}.zip"
 
@@ -162,14 +174,7 @@ class Updater:
                 self.checked = time.time()
                 return
             raise
-        beta = channel == "beta"
-        best, best_key = None, None
-        for rel in releases:
-            if rel.get("draft") or (rel.get("prerelease") and not beta):
-                continue
-            key = version_key(rel.get("tag_name", ""))
-            if key and (best_key is None or key > best_key):
-                best, best_key = rel, key
+        best, best_key = newest(releases, channel)
         self.checked = time.time()
         if best is None:
             self.etag = (channel, etag) if etag else None
@@ -186,7 +191,7 @@ class Updater:
         # one whose install failed has to be fetched again.
         self.etag = (channel, etag) if etag else None
 
-    def install(self, target: str, asset: dict, cfg: dict) -> None:
+    def install(self, target: str, asset: dict, cfg: dict, restart: bool = True) -> None:
         versions = os.path.join(self.root, "versions")
         staging = os.path.join(versions, f".staging-{target}")
         shutil.rmtree(staging, ignore_errors=True)
@@ -217,7 +222,8 @@ class Updater:
         os.replace(src, final)
         shutil.rmtree(staging, ignore_errors=True)
 
-        state = {"current": target, "previous": self.version, "pending": True}
+        had = version_key(self.version) and os.path.isdir(os.path.join(versions, self.version))
+        state = {"current": target, "previous": self.version if had else None, "pending": restart}
         tmp = os.path.join(self.root, "launcher.json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(state, f)
@@ -226,6 +232,9 @@ class Updater:
         shutil.copyfile(os.path.join(final, "launcher.py"), os.path.join(self.root, "launcher.py.tmp"))
         os.replace(os.path.join(self.root, "launcher.py.tmp"), os.path.join(self.root, "launcher.py"))
         self.prune(versions, keep={target, self.version})
+        if not restart:
+            self.log(f"installed {target}")
+            return
         self.log(f"installed {target}; restarting into it")
         os._exit(EXIT_UPDATE)  # from a thread: sys.exit would only end the thread
 
@@ -238,3 +247,48 @@ class Updater:
                 shutil.rmtree(os.path.join(versions, v), ignore_errors=True)
             else:
                 keep.add(v)
+
+
+def update_now(root: str, channel: str | None = None, log=print) -> str:
+    """One check, for an app that updates as it starts (install-virtual-edge.sh):
+    installs the newest release on the channel into <root>/versions if it is newer
+    than launcher.json's current, without restarting anything. channel defaults to
+    data/update.json's. Returns the version that is current afterwards."""
+    data = os.path.join(root, "data")
+    os.makedirs(os.path.join(root, "versions"), exist_ok=True)
+    os.makedirs(data, exist_ok=True)
+    try:
+        with open(os.path.join(root, "launcher.json"), encoding="utf-8") as f:
+            current = json.load(f).get("current") or "0.0.0"
+    except (OSError, ValueError):
+        current = "0.0.0"
+    up = Updater(os.path.join(root, "versions", current), data, current, log)
+    cfg = dict(up.config())
+    if channel:
+        cfg["channel"] = channel
+    if cfg.get("channel") not in ("stable", "beta") or not version_key(current):
+        return current
+    req = up.request(f"{cfg.get('api', 'https://api.github.com')}/repos/{cfg.get('repo', REPO)}/releases?per_page=30",
+                     cfg, "application/vnd.github+json")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        best, best_key = newest(json.load(resp), cfg["channel"])
+    if best is None or best_key <= version_key(current):
+        return current
+    target = best["tag_name"].lstrip("v")
+    if target == up.launcher_state().get("rolled_back_from"):  # the launcher gave up on it
+        return current
+    asset = next((a for a in best.get("assets", []) if a.get("name") == asset_name(target)), None)
+    if asset is None:
+        raise RuntimeError(f"release {target} has no {asset_name(target)}")
+    log(f"updating {current} -> {target}")
+    up.install(target, asset, cfg, restart=False)
+    return target
+
+
+if __name__ == "__main__":
+    # python3 updater.py update <root> [stable|beta]: update_now(), printing the current version.
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "update":
+        print(update_now(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None,
+                         log=lambda m: print(m, file=sys.stderr)))
+    else:
+        sys.exit("usage: updater.py update <root> [stable|beta]")
