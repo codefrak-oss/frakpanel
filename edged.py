@@ -706,19 +706,37 @@ class Hitlp:
         req = urllib.request.Request(f"{self.url}/tasks/{urllib.parse.quote(tid)}/decision", json.dumps(body).encode(),
                                      {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
                                       "Accept": "application/json"}, method="POST")
+        # HITLP's surface stream only announces new tasks, never a task ending, so a decision
+        # made here closes the popup here: on success, and on a refusal for a task that has ended.
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
-                return 200, json.loads(r.read() or b"null") or {}
+                out = json.loads(r.read() or b"null") or {}
+            self.remove(tid)
+            return 200, out
         except urllib.error.HTTPError as exc:
             try:
                 err = str(json.loads(exc.read() or b"{}").get("error") or exc.reason)
             except (ValueError, AttributeError):
                 err = str(exc.reason)
             self.log(f"hitlp: decision on {tid} refused: {exc.code} {err}")
+            if exc.code in (404, 409) and self.ended(tid):
+                self.remove(tid)
+                return 409, {"error": "already decided"}
             return 502, {"error": f"HITLP {exc.code}: {err}"}
         except (OSError, ValueError) as exc:
             self.log(f"hitlp: decision on {tid} failed: {exc!r}")
             return 502, {"error": f"HITLP unreachable: {exc}"}
+
+    def ended(self, tid: str) -> bool:
+        """Whether HITLP says the task is over (or gone)."""
+        try:
+            obj = self.get(f"/tasks/{urllib.parse.quote(tid)}")
+        except urllib.error.HTTPError as exc:
+            return exc.code == 404
+        except (OSError, ValueError):
+            return False
+        obj = obj.get("task", obj) if isinstance(obj, dict) else {}
+        return str(obj.get("status") or "").lower() in HITLP_DONE
 
     def get(self, path: str):
         req = urllib.request.Request(self.url + path, headers={"Authorization": f"Bearer {self.token}",

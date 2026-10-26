@@ -32,6 +32,7 @@ class HitlpTest(unittest.TestCase):
         events = self.events = queue.Queue()  # SSE frames the fake HITLP sends
         decisions = self.decisions = []  # (path, body) the fake HITLP was POSTed
         self.decision_status = 200
+        self.status = {}  # task id -> the status the fake HITLP reports for it
         test = self
 
         class FakeHitlp(http.server.BaseHTTPRequestHandler):
@@ -51,6 +52,9 @@ class HitlpTest(unittest.TestCase):
                         self.wfile.write(frame.encode())
                         self.wfile.flush()
                 body = {"tasks": []} if self.path == "/tasks" else {"/tasks/t1": TASK, "/tasks/t2": ASK}.get(self.path)
+                tid = self.path.rsplit("/", 1)[-1]
+                if body is not None and tid in test.status:
+                    body = dict(body, status=test.status[tid])
                 data = json.dumps(body).encode()
                 self.send_response(200 if body is not None else 404)
                 self.send_header("Content-Length", str(len(data)))
@@ -137,16 +141,27 @@ class HitlpTest(unittest.TestCase):
         ev()
         self.events.put('event: task.created\ndata: {"id": "t2"}\n\n')
         ev()
+        self.assertEqual(self.post("/hitlp/answer", {"id": "t1", "outcome": "maybe"})[0], 400)
         self.assertEqual(self.post("/hitlp/answer", {"id": "t1", "outcome": "approve"}), (200, {"decided": "t1"}))
+        self.assertEqual([t["id"] for t in ev()[1]["tasks"]], ["t2"])  # closed at once; HITLP sends no event for it
         self.assertEqual(self.post("/hitlp/answer", {"id": "t2", "answer": "eu"})[0], 200)
+        self.assertEqual(ev()[0], "hide")
         self.assertEqual(self.decisions, [("/tasks/t1/decision", {"outcome": "approve", "payloadDigest": "sha256:abc"}),
                                           ("/tasks/t2/decision", {"answer": "eu"})])
-        self.assertEqual(self.post("/hitlp/answer", {"id": "t1", "outcome": "maybe"})[0], 400)
         self.assertEqual(self.post("/hitlp/answer", {"id": "nope", "outcome": "approve"})[0], 404)
+
+    def test_refused_decision_closes_only_an_ended_task(self):
+        ev = self.shell_stream()
+        ev()
+        self.events.put('event: task.created\ndata: {"id": "t1"}\n\n')
+        ev()
         self.decision_status = 409
         code, data = self.post("/hitlp/answer", {"id": "t1", "outcome": "reject"})
-        self.assertEqual(code, 502)
+        self.assertEqual(code, 502)  # still open at HITLP (a changed payload, say): it stays up
         self.assertIn("already decided", data["error"])
+        self.status["t1"] = "completed"  # decided on another surface
+        self.assertEqual(self.post("/hitlp/answer", {"id": "t1", "outcome": "reject"}), (409, {"error": "already decided"}))
+        self.assertEqual(ev()[0], "hide")
 
     def test_dismiss_hides(self):
         ev = self.shell_stream()
