@@ -108,6 +108,7 @@ Standard library only. Runs with:
 """
 from __future__ import annotations
 
+from datetime import datetime
 import hashlib
 import html
 import http.server
@@ -586,7 +587,8 @@ class Hitlp:
 
     listen() holds one outbound SSE stream to HITLP's GET /events (EDGED_HITLP_URL,
     with EDGED_HITLP_TOKEN as bearer) and blocks on it: no timer. A new task is read
-    once with GET /tasks/{id}; a closed/decided/expired event drops it. After the
+    once with GET /tasks/{id}; a closed/decided/expired event drops it,
+    and a task past its deadline is hidden even if no event comes. After the
     stream drops it reconnects with backoff and resyncs once with GET /tasks.
     """
 
@@ -597,8 +599,19 @@ class Hitlp:
         self.version = 0
         self.cond = threading.Condition()
 
+    @staticmethod
+    def due(task: dict) -> float | None:
+        """The task's deadline as epoch seconds, or None if it has none we can read."""
+        try:
+            return datetime.fromisoformat(task.get("deadline", "").replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            return None
+
     def visible(self) -> list[dict]:  # caller holds self.cond
-        return [t for i, t in self.tasks.items() if i not in self.dismissed]
+        # A request past its deadline goes away on its own, without waiting for HITLP's expired event.
+        now = time.time()
+        return [t for i, t in self.tasks.items()
+                if i not in self.dismissed and (self.due(t) or float("inf")) > now]
 
     def changed(self) -> None:  # caller holds self.cond
         self.version += 1
@@ -631,7 +644,10 @@ class Hitlp:
 
     def wait(self, version: int, timeout: float) -> tuple[int, list[dict]]:
         with self.cond:
-            self.cond.wait_for(lambda: self.version != version, timeout)
+            # Wake at the next deadline too, so an expiring request is hidden on time.
+            now = time.time()
+            dues = [d - now for t in self.visible() if (d := self.due(t)) is not None]
+            self.cond.wait_for(lambda: self.version != version, max(0.0, min([timeout, *dues])))
             return self.version, self.visible()
 
     @staticmethod
